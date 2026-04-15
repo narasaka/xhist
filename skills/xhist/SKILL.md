@@ -18,7 +18,7 @@ AI agents lose context between sessions. xhist solves this: every read and write
 - First operation auto-creates both files if needed
 - All output is JSON to stdout by default
 - Errors go to stderr as `{"error": "message"}` with exit code 1
-- Shell quoting: ranges with `!` must be single-quoted in zsh (e.g. `'Sheet1!A1'`)
+- Shell quoting: ranges with `!` must be single-quoted in interactive bash and zsh (e.g. `'Sheet1!A1'`)
 
 ## Cell Addressing
 
@@ -193,6 +193,6 @@ xhist log budget.xlsx --last 5 --with-values       # see actual values
 ## Common Mistakes
 
 - Forgetting `-m` on writes (it is required, the command will fail)
-- Not quoting `!` in ranges in zsh (`Sheet1!A1` triggers history expansion, use `'Sheet1!A1'`)
+- Not quoting `!` in ranges (`Sheet1!A1` triggers history expansion in interactive bash and zsh, use `'Sheet1!A1'`)
 - Passing `.xhist` instead of `.xlsx` as the file argument
 - Writing formulas without the `=` prefix (they will be stored as strings)
