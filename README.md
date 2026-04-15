@@ -41,3 +41,11 @@ make lint       Run gofmt check and go vet
 make install    Install to GOPATH/bin
 make clean      Remove build artifacts
 ```
+
+## Agent Skill
+
+Install the xhist skill so your AI agent knows how to use the CLI:
+
+```
+npx skills add https://github.com/prosights/xhist --skill xhist
+```
