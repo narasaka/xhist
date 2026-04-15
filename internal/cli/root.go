@@ -30,6 +30,7 @@ func buildRootCommand() *cli.Command {
 			newVerifyCmd(),
 			newRepairCmd(),
 			newReindexCmd(),
+			newCommentCmd(),
 		},
 	}
 }

@@ -51,21 +51,52 @@ func newShowCmd() *cli.Command {
 					}
 					return outputErrorTo(errW, fmt.Sprintf("reading record: %v", err))
 				}
-				op, ok := rec.Parsed.(format.Op)
-				if !ok || op.Sequence != uint32(targetSeq) {
+				switch v := rec.Parsed.(type) {
+				case format.Op:
+					if v.Sequence != uint32(targetSeq) {
+						continue
+					}
+					m := map[string]any{
+						"seq":     v.Sequence,
+						"ts":      time.UnixMilli(v.Timestamp).UTC().Format(time.RFC3339),
+						"action":  actionString(v.Action),
+						"sheet":   v.Sheet,
+						"range":   v.Range,
+						"message": v.Message,
+						"values":  flatToGrid(v.Cells, int(v.NumRows), int(v.NumCols)),
+					}
+					if len(v.Comments) > 0 {
+						comments := make([]map[string]any, len(v.Comments))
+						for i, c := range v.Comments {
+							comments[i] = map[string]any{"cell": c.Cell, "author": c.Author, "text": c.Text}
+						}
+						m["comments"] = comments
+					}
+					return outputJSON(cmdOut(cmd), m)
+				case format.CommentOp:
+					if v.Sequence != uint32(targetSeq) {
+						continue
+					}
+					m := map[string]any{
+						"seq":     v.Sequence,
+						"ts":      time.UnixMilli(v.Timestamp).UTC().Format(time.RFC3339),
+						"type":    "comment",
+						"action":  commentActionString(v.Action),
+						"sheet":   v.Sheet,
+						"range":   v.Range,
+						"message": v.Message,
+					}
+					if len(v.Entries) > 0 {
+						entries := make([]map[string]any, len(v.Entries))
+						for i, e := range v.Entries {
+							entries[i] = map[string]any{"cell": e.Cell, "author": e.Author, "text": e.Text}
+						}
+						m["entries"] = entries
+					}
+					return outputJSON(cmdOut(cmd), m)
+				default:
 					continue
 				}
-
-				m := map[string]any{
-					"seq":     op.Sequence,
-					"ts":      time.UnixMilli(op.Timestamp).UTC().Format(time.RFC3339),
-					"action":  actionString(op.Action),
-					"sheet":   op.Sheet,
-					"range":   op.Range,
-					"message": op.Message,
-					"values":  flatToGrid(op.Cells, int(op.NumRows), int(op.NumCols)),
-				}
-				return outputJSON(cmdOut(cmd), m)
 			}
 		},
 	}

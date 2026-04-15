@@ -24,6 +24,9 @@ func newWriteCmd() *cli.Command {
 			&cli.StringFlag{Name: "json", Usage: "Values as JSON array of arrays"},
 			&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Read values from a JSON file"},
 			&cli.BoolFlag{Name: "stdin", Usage: "Read values from stdin"},
+			&cli.StringFlag{Name: "comment", Usage: "Comment text for the cell (single-cell writes only)"},
+			&cli.StringFlag{Name: "comments", Usage: "Comments as JSON array of arrays matching value grid"},
+			&cli.StringFlag{Name: "comment-author", Usage: "Author name for comments (default: xhist)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			errW := cmdErr(cmd)
@@ -74,6 +77,62 @@ func newWriteCmd() *cli.Command {
 				return outputErrorTo(errW, fmt.Sprintf("writing cells: %v", err))
 			}
 
+			if isSingle && cmd.String("comments") != "" {
+				return outputErrorTo(errW, "--comments is only valid for range writes")
+			}
+			if !isSingle && cmd.String("comment") != "" {
+				return outputErrorTo(errW, "--comment is only valid for single-cell writes")
+			}
+
+			var commentEntries []format.CommentEntry
+			commentAuthor := cmd.String("comment-author")
+			if commentAuthor == "" {
+				commentAuthor = "xhist"
+			}
+
+			if isSingle && cmd.String("comment") != "" {
+				commentText := cmd.String("comment")
+				if err := excel.SetComment(xlsxPath, sheet, topLeft, commentAuthor, commentText); err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("setting comment: %v", err))
+				}
+				commentEntries = append(commentEntries, format.CommentEntry{
+					Cell: topLeft, Author: commentAuthor, Text: commentText,
+				})
+			} else if cmd.String("comments") != "" {
+				var commentsGrid [][]string
+				if err := json.Unmarshal([]byte(cmd.String("comments")), &commentsGrid); err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("parsing comments: %v", err))
+				}
+				if len(commentsGrid) != len(cells) {
+					return outputErrorTo(errW, fmt.Sprintf("comments rows (%d) don't match value rows (%d)", len(commentsGrid), len(cells)))
+				}
+				for i, row := range commentsGrid {
+					if len(row) != len(cells[i]) {
+						return outputErrorTo(errW, fmt.Sprintf("comments cols in row %d (%d) don't match value cols (%d)", i, len(row), len(cells[i])))
+					}
+				}
+				var excelComments []excel.Comment
+				startRow, startCol, _ := excel.ParseCellRef(topLeft)
+				for r, row := range commentsGrid {
+					for c, text := range row {
+						if text != "" {
+							ref := excel.CellRef(startRow+r, startCol+c)
+							excelComments = append(excelComments, excel.Comment{
+								Cell: ref, Author: commentAuthor, Text: text,
+							})
+							commentEntries = append(commentEntries, format.CommentEntry{
+								Cell: ref, Author: commentAuthor, Text: text,
+							})
+						}
+					}
+				}
+				if len(excelComments) > 0 {
+					if err := excel.SetComments(xlsxPath, sheet, excelComments); err != nil {
+						return outputErrorTo(errW, fmt.Sprintf("setting comments: %v", err))
+					}
+				}
+			}
+
 			seq, err := lastSequence(xhp)
 			if err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("reading sequence: %v", err))
@@ -111,6 +170,7 @@ func newWriteCmd() *cli.Command {
 				NumRows:   uint32(rows),
 				NumCols:   uint32(cols),
 				Cells:     flat,
+				Comments:  commentEntries,
 			}
 			if err := w.WriteOp(op); err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("writing op: %v", err))
@@ -120,7 +180,11 @@ func newWriteCmd() *cli.Command {
 			for _, row := range cells {
 				cellCount += len(row)
 			}
-			return outputJSON(cmdOut(cmd), map[string]any{"seq": seq, "cells_written": cellCount})
+			result := map[string]any{"seq": seq, "cells_written": cellCount}
+			if len(commentEntries) > 0 {
+				result["comments_written"] = len(commentEntries)
+			}
+			return outputJSON(cmdOut(cmd), result)
 		},
 	}
 }

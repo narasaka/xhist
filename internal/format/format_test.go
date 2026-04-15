@@ -34,8 +34,8 @@ func TestConstants(t *testing.T) {
 	if IndexPreambleSize != 19 {
 		t.Fatalf("IndexPreambleSize = %d, want 19", IndexPreambleSize)
 	}
-	if IndexVersion != 0x01 {
-		t.Fatalf("IndexVersion = %d, want 1", IndexVersion)
+	if IndexVersion != 0x02 {
+		t.Fatalf("IndexVersion = %d, want 2", IndexVersion)
 	}
 	if RecordFramingOverhead != 9 {
 		t.Fatalf("RecordFramingOverhead = %d, want 9", RecordFramingOverhead)
@@ -52,6 +52,9 @@ func TestOpcodes(t *testing.T) {
 	if OpcodeMetadata != 0x03 {
 		t.Fatal("OpcodeMetadata wrong")
 	}
+	if OpcodeCommentOp != 0x04 {
+		t.Fatal("OpcodeCommentOp wrong")
+	}
 	if OpcodeFooter != 0xFF {
 		t.Fatal("OpcodeFooter wrong")
 	}
@@ -63,6 +66,18 @@ func TestActionTypes(t *testing.T) {
 	}
 	if ActionWrite != 2 {
 		t.Fatal("ActionWrite wrong")
+	}
+}
+
+func TestCommentActionTypes(t *testing.T) {
+	if ActionCommentSet != 1 {
+		t.Fatal("ActionCommentSet wrong")
+	}
+	if ActionCommentGet != 2 {
+		t.Fatal("ActionCommentGet wrong")
+	}
+	if ActionCommentDelete != 3 {
+		t.Fatal("ActionCommentDelete wrong")
 	}
 }
 

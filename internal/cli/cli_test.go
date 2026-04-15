@@ -536,3 +536,175 @@ func TestInfoMetadata(t *testing.T) {
 		t.Fatalf("info: expected session.id=sess-123, got %v", meta["session.id"])
 	}
 }
+
+func TestWriteWithComment(t *testing.T) {
+	dir := t.TempDir()
+	xlsx := filepath.Join(dir, "test.xlsx")
+	runCLI(t, "init", xlsx)
+
+	out, _, err := runCLI(t, "write", "-m", "with comment", "--comment", "Source: SAP", xlsx, "Sheet1!A1", "1250000")
+	if err != nil {
+		t.Fatalf("write with comment: %v", err)
+	}
+	m := parseJSON(t, out)
+	if m["seq"].(float64) != 1 {
+		t.Fatalf("expected seq=1, got %v", m["seq"])
+	}
+	if m["comments_written"].(float64) != 1 {
+		t.Fatalf("expected comments_written=1, got %v", m["comments_written"])
+	}
+}
+
+func TestWriteWithCommentsRange(t *testing.T) {
+	dir := t.TempDir()
+	xlsx := filepath.Join(dir, "test.xlsx")
+	runCLI(t, "init", xlsx)
+
+	out, _, err := runCLI(t, "write", "-m", "range with comments",
+		"--json", `[["Revenue","Cost"],["1250000","830000"]]`,
+		"--comments", `[["Source: SAP","Source: SAP"],["","Source: Oracle"]]`,
+		xlsx, "Sheet1!A1:B2")
+	if err != nil {
+		t.Fatalf("write with comments: %v", err)
+	}
+	m := parseJSON(t, out)
+	if m["comments_written"].(float64) != 3 {
+		t.Fatalf("expected comments_written=3, got %v", m["comments_written"])
+	}
+}
+
+func TestWriteWithCommentAuthor(t *testing.T) {
+	dir := t.TempDir()
+	xlsx := filepath.Join(dir, "test.xlsx")
+	runCLI(t, "init", xlsx)
+
+	_, _, err := runCLI(t, "write", "-m", "custom author", "--comment", "test", "--comment-author", "agent-1", xlsx, "Sheet1!A1", "val")
+	if err != nil {
+		t.Fatalf("write with comment-author: %v", err)
+	}
+}
+
+func TestWriteCommentOnRangeErrors(t *testing.T) {
+	dir := t.TempDir()
+	xlsx := filepath.Join(dir, "test.xlsx")
+	runCLI(t, "init", xlsx)
+
+	_, _, err := runCLI(t, "write", "-m", "bad", "--comment", "test",
+		"--json", `[["a","b"]]`, xlsx, "Sheet1!A1:B1")
+	if err == nil {
+		t.Fatal("expected error using --comment with range write")
+	}
+}
+
+func TestCommentSetAndGet(t *testing.T) {
+	dir := t.TempDir()
+	xlsx := filepath.Join(dir, "test.xlsx")
+	runCLI(t, "init", xlsx)
+	runCLI(t, "write", "-m", "seed", xlsx, "Sheet1!A1", "100")
+
+	out, _, err := runCLI(t, "comment", "set", "-m", "adding source", xlsx, "Sheet1!A1", "Source: SAP report")
+	if err != nil {
+		t.Fatalf("comment set: %v", err)
+	}
+	m := parseJSON(t, out)
+	if m["comments_written"].(float64) != 1 {
+		t.Fatalf("expected comments_written=1, got %v", m["comments_written"])
+	}
+
+	out, _, err = runCLI(t, "comment", "get", xlsx, "Sheet1!A1")
+	if err != nil {
+		t.Fatalf("comment get: %v", err)
+	}
+	m = parseJSON(t, out)
+	if m["text"] != "Source: SAP report" {
+		t.Fatalf("expected comment text, got %v", m["text"])
+	}
+	if m["cell"] != "A1" {
+		t.Fatalf("expected cell A1, got %v", m["cell"])
+	}
+}
+
+func TestCommentSetRange(t *testing.T) {
+	dir := t.TempDir()
+	xlsx := filepath.Join(dir, "test.xlsx")
+	runCLI(t, "init", xlsx)
+
+	out, _, err := runCLI(t, "comment", "set", "-m", "citations",
+		"--json", `[["Source: SAP",""],["Source: Oracle","Source: Bloomberg"]]`,
+		xlsx, "Sheet1!A1:B2")
+	if err != nil {
+		t.Fatalf("comment set range: %v", err)
+	}
+	m := parseJSON(t, out)
+	if m["comments_written"].(float64) != 3 {
+		t.Fatalf("expected 3 comments, got %v", m["comments_written"])
+	}
+}
+
+func TestCommentDelete(t *testing.T) {
+	dir := t.TempDir()
+	xlsx := filepath.Join(dir, "test.xlsx")
+	runCLI(t, "init", xlsx)
+	runCLI(t, "write", "-m", "seed", xlsx, "Sheet1!A1", "100")
+	runCLI(t, "comment", "set", "-m", "add", xlsx, "Sheet1!A1", "to delete")
+
+	out, _, err := runCLI(t, "comment", "delete", "-m", "removing", xlsx, "Sheet1!A1")
+	if err != nil {
+		t.Fatalf("comment delete: %v", err)
+	}
+	m := parseJSON(t, out)
+	if m["comments_deleted"].(float64) != 1 {
+		t.Fatalf("expected comments_deleted=1, got %v", m["comments_deleted"])
+	}
+
+	out, _, err = runCLI(t, "comment", "get", xlsx, "Sheet1!A1")
+	if err != nil {
+		t.Fatalf("comment get after delete: %v", err)
+	}
+	if strings.TrimSpace(out) != "null" {
+		t.Fatalf("expected null after delete, got %q", out)
+	}
+}
+
+func TestCommentGetRange(t *testing.T) {
+	dir := t.TempDir()
+	xlsx := filepath.Join(dir, "test.xlsx")
+	runCLI(t, "init", xlsx)
+	runCLI(t, "comment", "set", "-m", "a", xlsx, "Sheet1!A1", "first")
+	runCLI(t, "comment", "set", "-m", "b", xlsx, "Sheet1!B2", "second")
+	runCLI(t, "comment", "set", "-m", "c", xlsx, "Sheet1!C3", "outside")
+
+	out, _, err := runCLI(t, "comment", "get", xlsx, "Sheet1!A1:B2")
+	if err != nil {
+		t.Fatalf("comment get range: %v", err)
+	}
+	arr := parseJSONArray(t, out)
+	if len(arr) != 2 {
+		t.Fatalf("expected 2 comments in range, got %d", len(arr))
+	}
+}
+
+func TestCommentSequenceContinuity(t *testing.T) {
+	dir := t.TempDir()
+	xlsx := filepath.Join(dir, "test.xlsx")
+	runCLI(t, "init", xlsx)
+	runCLI(t, "write", "-m", "w1", xlsx, "Sheet1!A1", "100")
+
+	out, _, err := runCLI(t, "comment", "set", "-m", "c1", xlsx, "Sheet1!A1", "comment")
+	if err != nil {
+		t.Fatalf("comment set: %v", err)
+	}
+	m := parseJSON(t, out)
+	if m["seq"].(float64) != 2 {
+		t.Fatalf("expected seq=2 after write+comment, got %v", m["seq"])
+	}
+
+	out, _, err = runCLI(t, "write", "-m", "w2", xlsx, "Sheet1!A2", "200")
+	if err != nil {
+		t.Fatalf("write after comment: %v", err)
+	}
+	m = parseJSON(t, out)
+	if m["seq"].(float64) != 3 {
+		t.Fatalf("expected seq=3, got %v", m["seq"])
+	}
+}

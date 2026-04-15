@@ -36,15 +36,18 @@ func newInfoCmd() *cli.Command {
 			}
 
 			var (
-				target    string
-				created   int64
-				ops       int
-				reads     int
-				writes    int
-				lastOpTS  int64
-				sheetsMap = map[string]bool{}
-				hasFooter bool
-				metadata  = map[string]string{}
+				target         string
+				created        int64
+				ops            int
+				reads          int
+				writes         int
+				commentSets    int
+				commentGets    int
+				commentDeletes int
+				lastOpTS       int64
+				sheetsMap      = map[string]bool{}
+				hasFooter      bool
+				metadata       = map[string]string{}
 			)
 
 			for {
@@ -65,6 +68,21 @@ func newInfoCmd() *cli.Command {
 						reads++
 					} else {
 						writes++
+					}
+					if v.Timestamp > lastOpTS {
+						lastOpTS = v.Timestamp
+					}
+					if v.Sheet != "" {
+						sheetsMap[v.Sheet] = true
+					}
+				case format.CommentOp:
+					switch v.Action {
+					case format.ActionCommentSet:
+						commentSets++
+					case format.ActionCommentGet:
+						commentGets++
+					case format.ActionCommentDelete:
+						commentDeletes++
 					}
 					if v.Timestamp > lastOpTS {
 						lastOpTS = v.Timestamp
@@ -112,6 +130,11 @@ func newInfoCmd() *cli.Command {
 			}
 			if lastOpTS > 0 {
 				result["last_op"] = time.UnixMilli(lastOpTS).UTC().Format(time.RFC3339)
+			}
+			if commentSets+commentGets+commentDeletes > 0 {
+				result["comment_sets"] = commentSets
+				result["comment_gets"] = commentGets
+				result["comment_deletes"] = commentDeletes
 			}
 			return outputJSON(cmdOut(cmd), result)
 		},

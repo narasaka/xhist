@@ -66,9 +66,14 @@ func lastSequence(xhistPath string) (uint32, error) {
 			}
 			return maxSeq, nil
 		}
-		if op, ok := rec.Parsed.(format.Op); ok {
-			if op.Sequence > maxSeq {
-				maxSeq = op.Sequence
+		switch v := rec.Parsed.(type) {
+		case format.Op:
+			if v.Sequence > maxSeq {
+				maxSeq = v.Sequence
+			}
+		case format.CommentOp:
+			if v.Sequence > maxSeq {
+				maxSeq = v.Sequence
 			}
 		}
 	}

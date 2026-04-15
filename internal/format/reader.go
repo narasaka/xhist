@@ -97,6 +97,12 @@ func (rd *Reader) Next() (*ParsedRecord, error) {
 			return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid op payload: " + err.Error()}
 		}
 		rec.Parsed = parsed
+	case OpcodeCommentOp:
+		parsed, err := decodeCommentOpPayload(payload)
+		if err != nil {
+			return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid comment op payload: " + err.Error()}
+		}
+		rec.Parsed = parsed
 	case OpcodeMetadata:
 		parsed, err := decodeMetadataPayload(payload)
 		if err != nil {

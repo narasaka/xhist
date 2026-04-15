@@ -402,6 +402,138 @@ func TestReaderCRCCoversLengthField(t *testing.T) {
 	}
 }
 
+func TestReaderCommentOp(t *testing.T) {
+	var buf bytes.Buffer
+	w, _ := NewWriter(&buf)
+	w.WriteHeader(1000, "test.xlsx")
+	cop := CommentOp{
+		Timestamp:  4000,
+		Sequence:   1,
+		Action:     ActionCommentSet,
+		Sheet:      "Sheet1",
+		Range:      "A1",
+		Message:    "set comment",
+		NumEntries: 1,
+		Entries:    []CommentEntry{{Cell: "A1", Author: "bob", Text: "note"}},
+	}
+	w.WriteCommentOp(cop)
+
+	rd, _ := NewReader(bytes.NewReader(buf.Bytes()))
+	rd.Next() // header
+	rec, err := rd.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Opcode != OpcodeCommentOp {
+		t.Fatalf("opcode = 0x%02x, want OpcodeCommentOp", rec.Opcode)
+	}
+	parsed := rec.Parsed.(CommentOp)
+	if parsed.Timestamp != 4000 || parsed.Sequence != 1 || parsed.Action != ActionCommentSet {
+		t.Fatalf("comment op = %+v", parsed)
+	}
+	if parsed.Sheet != "Sheet1" || parsed.Range != "A1" || parsed.Message != "set comment" {
+		t.Fatalf("comment op strings = %+v", parsed)
+	}
+	if len(parsed.Entries) != 1 || parsed.Entries[0].Cell != "A1" || parsed.Entries[0].Author != "bob" || parsed.Entries[0].Text != "note" {
+		t.Fatalf("comment entries = %+v", parsed.Entries)
+	}
+}
+
+func TestReaderOpWithComments(t *testing.T) {
+	var buf bytes.Buffer
+	w, _ := NewWriter(&buf)
+	w.WriteHeader(1000, "test.xlsx")
+	w.WriteOp(Op{
+		Timestamp: 2000, Sequence: 1, Action: ActionRead,
+		Sheet: "Sheet1", Range: "A1", Message: "read",
+		NumRows: 1, NumCols: 1,
+		Cells:    []Cell{{Type: CellString, String: "val"}},
+		Comments: []CommentEntry{{Cell: "A1", Author: "alice", Text: "important"}},
+	})
+
+	rd, _ := NewReader(bytes.NewReader(buf.Bytes()))
+	rd.Next() // header
+	rec, err := rd.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := rec.Parsed.(Op)
+	if len(op.Comments) != 1 {
+		t.Fatalf("comments count = %d, want 1", len(op.Comments))
+	}
+	if op.Comments[0].Cell != "A1" || op.Comments[0].Author != "alice" || op.Comments[0].Text != "important" {
+		t.Fatalf("comment = %+v", op.Comments[0])
+	}
+	if len(op.Cells) != 1 || op.Cells[0].String != "val" {
+		t.Fatalf("cells should still decode: %+v", op.Cells)
+	}
+}
+
+func TestReaderOpWithoutComments(t *testing.T) {
+	var buf bytes.Buffer
+	w, _ := NewWriter(&buf)
+	w.WriteHeader(1000, "test.xlsx")
+	w.WriteOp(Op{
+		Timestamp: 2000, Sequence: 1, Action: ActionRead,
+		Sheet: "Sheet1", Range: "A1", Message: "read",
+		NumRows: 1, NumCols: 1,
+		Cells: []Cell{{Type: CellString, String: "val"}},
+	})
+
+	rd, _ := NewReader(bytes.NewReader(buf.Bytes()))
+	rd.Next() // header
+	rec, err := rd.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := rec.Parsed.(Op)
+	if len(op.Comments) != 0 {
+		t.Fatalf("expected no comments, got %d", len(op.Comments))
+	}
+	if len(op.Cells) != 1 || op.Cells[0].String != "val" {
+		t.Fatalf("cells = %+v", op.Cells)
+	}
+}
+
+func TestWriterReaderRoundTripCommentOp(t *testing.T) {
+	var buf bytes.Buffer
+	w, _ := NewWriter(&buf)
+	w.WriteHeader(1000, "test.xlsx")
+
+	entries := []CommentEntry{
+		{Cell: "A1", Author: "alice", Text: "first comment"},
+		{Cell: "B2", Author: "bob", Text: "second comment"},
+		{Cell: "C3", Author: "charlie", Text: "third comment"},
+	}
+	w.WriteCommentOp(CommentOp{
+		Timestamp:  5000,
+		Sequence:   1,
+		Action:     ActionCommentSet,
+		Sheet:      "Sheet1",
+		Range:      "A1:C3",
+		Message:    "batch comments",
+		NumEntries: 3,
+		Entries:    entries,
+	})
+
+	rd, _ := NewReader(bytes.NewReader(buf.Bytes()))
+	rd.Next() // header
+	rec, err := rd.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cop := rec.Parsed.(CommentOp)
+	if cop.NumEntries != 3 || len(cop.Entries) != 3 {
+		t.Fatalf("entry count = %d, want 3", len(cop.Entries))
+	}
+	for i, want := range entries {
+		got := cop.Entries[i]
+		if got.Cell != want.Cell || got.Author != want.Author || got.Text != want.Text {
+			t.Fatalf("entry[%d] = %+v, want %+v", i, got, want)
+		}
+	}
+}
+
 func TestRecordFrameOverhead(t *testing.T) {
 	payload := []byte("test")
 	frame := encodeRecord(OpcodeMetadata, payload)

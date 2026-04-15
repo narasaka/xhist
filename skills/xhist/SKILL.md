@@ -93,17 +93,73 @@ The `-m` flag is required on writes. Always explain why the write is being perfo
 
 Output on success: `{"seq": 1, "cells_written": 2}`
 
+#### Writing with comments
+
+Attach comments (citations, sources) to cells in the same write operation:
+
+```bash
+# Single cell: value + comment
+xhist write budget.xlsx 'Sheet1!A1' "1250000" \
+  -m "Q1 revenue" \
+  --comment "Source: SAP report FY2025-Q1, pulled 2025-03-15"
+
+# Range: values + per-cell comments via JSON
+xhist write budget.xlsx 'Sheet1!A1:B2' \
+  --json '[["Revenue","Cost"],["1250000","830000"]]' \
+  --comments '[["Source: SAP FY25-Q1","Source: SAP FY25-Q1"],["","Source: Oracle ERP"]]' \
+  -m "Q1 financials with sources"
+
+# Custom author (default is "xhist")
+xhist write budget.xlsx 'Sheet1!A1' "value" -m "msg" --comment "note" --comment-author "agent-1"
+```
+
+- `--comment <text>` — single comment for single-cell writes only
+- `--comments <json>` — 2D array of comment strings matching the value grid. Empty string = no comment.
+- `--comment-author <name>` — author for all comments in this write (default: "xhist")
+- Comments appear as native Excel comments/notes when the workbook is opened
+
+Output: `{"seq": 1, "cells_written": 1, "comments_written": 1}`
+
+### Manage comments
+
+Set, get, or delete cell comments independently of cell values:
+
+```bash
+# Set comment on a single cell
+xhist comment set budget.xlsx 'Sheet1!A1' "Updated citation: annual report p.42" \
+  --author "agent-1" -m "Correcting source"
+
+# Set comments on a range via JSON
+xhist comment set budget.xlsx 'Sheet1!A1:B2' \
+  --json '[["Source: SAP",""],["Source: Oracle","Source: Bloomberg"]]' \
+  --author "agent-1" -m "Adding citations"
+
+# Get comment from a single cell
+xhist comment get budget.xlsx 'Sheet1!A1'
+# → {"cell": "A1", "author": "agent-1", "text": "Source: SAP report FY2025-Q1"}
+
+# Get comments from a range (sparse — only cells with comments)
+xhist comment get budget.xlsx 'Sheet1!A1:C10'
+# → [{"cell": "A1", "author": "...", "text": "..."}, ...]
+
+# Delete comment from a cell
+xhist comment delete budget.xlsx 'Sheet1!A1' -m "Removing outdated citation"
+
+# Delete comments from a range
+xhist comment delete budget.xlsx 'Sheet1!A1:C10' -m "Clearing all citations"
+```
+
+The `-m` flag is required on `set` and `delete`. The `get` action does not require it.
+
 ### Review history
 
 ```bash
-# Full log
+# Full log (includes both read/write ops and comment ops)
 xhist log budget.xlsx
 
-# Last 5 operations
-xhist log budget.xlsx --last 5
-
-# Filter by action
+# Filter by action (read, write, comment_set, comment_get, comment_delete)
 xhist log budget.xlsx --action write
+xhist log budget.xlsx --action comment_set
 
 # Include cell values
 xhist log budget.xlsx --last 3 --with-values
@@ -121,7 +177,7 @@ xhist log budget.xlsx --follow
 xhist show budget.xlsx 3
 ```
 
-Returns full details including cell values for operation with sequence number 3.
+Returns full details including cell values for operation with sequence number 3. Works for both read/write ops and comment ops.
 
 ### Recover context (new session)
 
@@ -144,6 +200,9 @@ xhist state budget.xlsx --at 10
 
 # Compare reconstructed state vs actual file (detect out-of-band edits)
 xhist state budget.xlsx --diff
+
+# Include comment state in reconstruction
+xhist state budget.xlsx --with-comments
 ```
 
 ### Initialize explicitly
@@ -196,3 +255,5 @@ xhist log budget.xlsx --last 5 --with-values       # see actual values
 - Not quoting `!` in ranges (`Sheet1!A1` triggers history expansion in interactive bash and zsh, use `'Sheet1!A1'`)
 - Passing `.xhist` instead of `.xlsx` as the file argument
 - Writing formulas without the `=` prefix (they will be stored as strings)
+- Using `--comment` with range writes (use `--comments` with a JSON grid instead)
+- Using `--comments` with single-cell writes (use `--comment` instead)

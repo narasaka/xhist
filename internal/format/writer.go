@@ -68,7 +68,44 @@ func (wr *Writer) WriteOp(op Op) error {
 		}
 	}
 
+	if len(op.Comments) > 0 {
+		wr.buf.WriteByte(1)
+		binary.LittleEndian.PutUint32(tmp[:4], uint32(len(op.Comments)))
+		wr.buf.Write(tmp[:4])
+		for _, c := range op.Comments {
+			encodeCommentEntry(&wr.buf, c)
+		}
+	} else {
+		wr.buf.WriteByte(0)
+	}
+
 	return wr.writeRecord(OpcodeOp, wr.buf.Bytes())
+}
+
+func (wr *Writer) WriteCommentOp(c CommentOp) error {
+	wr.buf.Reset()
+	var tmp [8]byte
+
+	binary.LittleEndian.PutUint64(tmp[:], uint64(c.Timestamp))
+	wr.buf.Write(tmp[:])
+
+	binary.LittleEndian.PutUint32(tmp[:4], c.Sequence)
+	wr.buf.Write(tmp[:4])
+
+	wr.buf.WriteByte(c.Action)
+
+	encodeLPString(&wr.buf, c.Sheet)
+	encodeLPString(&wr.buf, c.Range)
+	encodeLPString(&wr.buf, c.Message)
+
+	binary.LittleEndian.PutUint32(tmp[:4], c.NumEntries)
+	wr.buf.Write(tmp[:4])
+
+	for _, e := range c.Entries {
+		encodeCommentEntry(&wr.buf, e)
+	}
+
+	return wr.writeRecord(OpcodeCommentOp, wr.buf.Bytes())
 }
 
 // WriteMetadata writes a Metadata record.

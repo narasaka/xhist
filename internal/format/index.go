@@ -9,6 +9,7 @@ import (
 // IndexEntry is one entry in the sidecar index, corresponding to an Op record.
 type IndexEntry struct {
 	Offset    uint64
+	Opcode    uint8
 	Timestamp int64
 	Sequence  uint32
 	Action    uint8
@@ -48,10 +49,21 @@ func BuildIndex(xhistPath string) error {
 			op := rec.Parsed.(Op)
 			entries = append(entries, IndexEntry{
 				Offset:    uint64(recordOffset),
+				Opcode:    OpcodeOp,
 				Timestamp: op.Timestamp,
 				Sequence:  op.Sequence,
 				Action:    op.Action,
 				Sheet:     op.Sheet,
+			})
+		} else if rec.Opcode == OpcodeCommentOp {
+			cop := rec.Parsed.(CommentOp)
+			entries = append(entries, IndexEntry{
+				Offset:    uint64(recordOffset),
+				Opcode:    OpcodeCommentOp,
+				Timestamp: cop.Timestamp,
+				Sequence:  cop.Sequence,
+				Action:    cop.Action,
+				Sheet:     cop.Sheet,
 			})
 		}
 	}
@@ -88,13 +100,14 @@ func writeIndexPreamble(w io.Writer, logSize uint64, entryCount uint32) error {
 
 func writeIndexEntry(w io.Writer, e IndexEntry) error {
 	sheetBytes := []byte(e.Sheet)
-	buf := make([]byte, 8+8+4+1+2+len(sheetBytes))
+	buf := make([]byte, 8+1+8+4+1+2+len(sheetBytes))
 	binary.LittleEndian.PutUint64(buf[0:8], e.Offset)
-	binary.LittleEndian.PutUint64(buf[8:16], uint64(e.Timestamp))
-	binary.LittleEndian.PutUint32(buf[16:20], e.Sequence)
-	buf[20] = e.Action
-	binary.LittleEndian.PutUint16(buf[21:23], uint16(len(sheetBytes)))
-	copy(buf[23:], sheetBytes)
+	buf[8] = e.Opcode
+	binary.LittleEndian.PutUint64(buf[9:17], uint64(e.Timestamp))
+	binary.LittleEndian.PutUint32(buf[17:21], e.Sequence)
+	buf[21] = e.Action
+	binary.LittleEndian.PutUint16(buf[22:24], uint16(len(sheetBytes)))
+	copy(buf[24:], sheetBytes)
 	_, err := w.Write(buf)
 	return err
 }
@@ -122,17 +135,18 @@ func ReadIndex(idxPath string) ([]IndexEntry, error) {
 
 	entries := make([]IndexEntry, 0, entryCount)
 	for i := uint32(0); i < entryCount; i++ {
-		var fixed [23]byte
+		var fixed [24]byte
 		if _, err := io.ReadFull(f, fixed[:]); err != nil {
 			return nil, err
 		}
 		e := IndexEntry{
 			Offset:    binary.LittleEndian.Uint64(fixed[0:8]),
-			Timestamp: int64(binary.LittleEndian.Uint64(fixed[8:16])),
-			Sequence:  binary.LittleEndian.Uint32(fixed[16:20]),
-			Action:    fixed[20],
+			Opcode:    fixed[8],
+			Timestamp: int64(binary.LittleEndian.Uint64(fixed[9:17])),
+			Sequence:  binary.LittleEndian.Uint32(fixed[17:21]),
+			Action:    fixed[21],
 		}
-		sheetLen := binary.LittleEndian.Uint16(fixed[21:23])
+		sheetLen := binary.LittleEndian.Uint16(fixed[22:24])
 		if sheetLen > 0 {
 			sheetBuf := make([]byte, sheetLen)
 			if _, err := io.ReadFull(f, sheetBuf); err != nil {

@@ -181,6 +181,51 @@ func (cw *countWriter) Write(p []byte) (int, error) {
 	return cw.fn(p)
 }
 
+func TestWriteCommentOpByteLayout(t *testing.T) {
+	var buf bytes.Buffer
+	w, _ := NewWriter(&buf)
+	cop := CommentOp{
+		Timestamp:  5000,
+		Sequence:   3,
+		Action:     ActionCommentSet,
+		Sheet:      "Sheet1",
+		Range:      "A1",
+		Message:    "adding comment",
+		NumEntries: 1,
+		Entries: []CommentEntry{
+			{Cell: "A1", Author: "alice", Text: "hello"},
+		},
+	}
+	if err := w.WriteCommentOp(cop); err != nil {
+		t.Fatal(err)
+	}
+
+	data := buf.Bytes()[PreambleSize:]
+	if data[0] != OpcodeCommentOp {
+		t.Fatalf("opcode = 0x%02x, want 0x%02x", data[0], OpcodeCommentOp)
+	}
+
+	payloadLen := binary.LittleEndian.Uint32(data[1:5])
+	storedCRC := binary.LittleEndian.Uint32(data[5+payloadLen : 5+payloadLen+4])
+	computedCRC := crc32.ChecksumIEEE(data[:5+payloadLen])
+	if storedCRC != computedCRC {
+		t.Fatalf("CRC mismatch: stored=0x%08x computed=0x%08x", storedCRC, computedCRC)
+	}
+
+	payload := data[5 : 5+payloadLen]
+	ts := int64(binary.LittleEndian.Uint64(payload[0:8]))
+	if ts != 5000 {
+		t.Fatalf("timestamp = %d, want 5000", ts)
+	}
+	seq := binary.LittleEndian.Uint32(payload[8:12])
+	if seq != 3 {
+		t.Fatalf("sequence = %d, want 3", seq)
+	}
+	if payload[12] != ActionCommentSet {
+		t.Fatalf("action = %d, want ActionCommentSet", payload[12])
+	}
+}
+
 func TestWriteFullFile(t *testing.T) {
 	var buf bytes.Buffer
 	w, _ := NewWriter(&buf)

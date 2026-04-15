@@ -20,6 +20,7 @@ func newStateCmd() *cli.Command {
 			&cli.IntFlag{Name: "at", Usage: "Reconstruct state as of operation N"},
 			&cli.StringFlag{Name: "range", Usage: "Show specific range only"},
 			&cli.BoolFlag{Name: "diff", Usage: "Compare reconstructed state vs actual xlsx"},
+			&cli.BoolFlag{Name: "with-comments", Usage: "Include comment state in output"},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			errW := cmdErr(cmd)
@@ -134,6 +135,88 @@ func newStateCmd() *cli.Command {
 				result[sheetName] = map[string]any{
 					"range":  rangeStr,
 					"values": grid,
+				}
+			}
+
+			if cmd.Bool("with-comments") {
+				commentState := map[string]map[string]map[string]string{}
+
+				f2, err := os.Open(xhp)
+				if err == nil {
+					defer f2.Close()
+					rd2, _ := format.NewReader(f2)
+					if rd2 != nil {
+						for {
+							rec, err := rd2.Next()
+							if err != nil {
+								break
+							}
+							if op, ok := rec.Parsed.(format.Op); ok {
+								if atSeq > 0 && op.Sequence > atSeq {
+									break
+								}
+								sheet := op.Sheet
+								if sheet == "" {
+									sheet = "Sheet1"
+								}
+								for _, c := range op.Comments {
+									if commentState[sheet] == nil {
+										commentState[sheet] = map[string]map[string]string{}
+									}
+									commentState[sheet][c.Cell] = map[string]string{
+										"author": c.Author, "text": c.Text,
+									}
+								}
+							}
+							if cop, ok := rec.Parsed.(format.CommentOp); ok {
+								if atSeq > 0 && cop.Sequence > atSeq {
+									break
+								}
+								sheet := cop.Sheet
+								if sheet == "" {
+									sheet = "Sheet1"
+								}
+								if sheetFilter != "" && sheet != sheetFilter {
+									continue
+								}
+								switch cop.Action {
+								case format.ActionCommentSet:
+									if commentState[sheet] == nil {
+										commentState[sheet] = map[string]map[string]string{}
+									}
+									for _, e := range cop.Entries {
+										commentState[sheet][e.Cell] = map[string]string{
+											"author": e.Author, "text": e.Text,
+										}
+									}
+								case format.ActionCommentDelete:
+									if commentState[sheet] != nil {
+										for _, e := range cop.Entries {
+											delete(commentState[sheet], e.Cell)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+
+				for sheetName, cells := range commentState {
+					if len(cells) == 0 {
+						continue
+					}
+					sheetResult, ok := result[sheetName].(map[string]any)
+					if !ok {
+						sheetResult = map[string]any{}
+						result[sheetName] = sheetResult
+					}
+					comments := make([]map[string]any, 0, len(cells))
+					for cell, info := range cells {
+						comments = append(comments, map[string]any{
+							"cell": cell, "author": info["author"], "text": info["text"],
+						})
+					}
+					sheetResult["comments"] = comments
 				}
 			}
 

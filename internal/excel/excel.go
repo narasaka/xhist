@@ -9,6 +9,13 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+// Comment represents an Excel cell comment.
+type Comment struct {
+	Cell   string // A1 notation, no sheet prefix
+	Author string
+	Text   string
+}
+
 // ReadCells reads cells from an xlsx file and returns them as a format.Cell grid.
 func ReadCells(path, sheet, topLeft, bottomRight string) ([][]format.Cell, error) {
 	f, err := excelize.OpenFile(path)
@@ -193,5 +200,132 @@ func ListSheets(path string) ([]SheetInfo, error) {
 func CreateWorkbook(path string) error {
 	f := excelize.NewFile()
 	defer f.Close()
+	return f.SaveAs(path)
+}
+
+func GetComments(path, sheet string) ([]Comment, error) {
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+	defer f.Close()
+
+	if sheet == "" {
+		sheet = f.GetSheetName(0)
+	}
+
+	exComments, err := f.GetComments(sheet)
+	if err != nil {
+		return nil, fmt.Errorf("getting comments from %s: %w", sheet, err)
+	}
+
+	var comments []Comment
+	for _, ec := range exComments {
+		comments = append(comments, Comment{
+			Cell:   ec.Cell,
+			Author: ec.Author,
+			Text:   ec.Text,
+		})
+	}
+	return comments, nil
+}
+
+func GetCellComment(path, sheet, cell string) (*Comment, error) {
+	comments, err := GetComments(path, sheet)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range comments {
+		if c.Cell == cell {
+			return &c, nil
+		}
+	}
+	return nil, nil
+}
+
+func SetComment(path, sheet, cell, author, text string) error {
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", path, err)
+	}
+	defer f.Close()
+
+	if sheet == "" {
+		sheet = f.GetSheetName(0)
+	}
+
+	_ = f.DeleteComment(sheet, cell)
+
+	if err := f.AddComment(sheet, excelize.Comment{
+		Cell:   cell,
+		Author: author,
+		Text:   text,
+	}); err != nil {
+		return fmt.Errorf("adding comment to %s: %w", cell, err)
+	}
+
+	return f.SaveAs(path)
+}
+
+func SetComments(path, sheet string, comments []Comment) error {
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", path, err)
+	}
+	defer f.Close()
+
+	if sheet == "" {
+		sheet = f.GetSheetName(0)
+	}
+
+	for _, c := range comments {
+		_ = f.DeleteComment(sheet, c.Cell)
+		if err := f.AddComment(sheet, excelize.Comment{
+			Cell:   c.Cell,
+			Author: c.Author,
+			Text:   c.Text,
+		}); err != nil {
+			return fmt.Errorf("adding comment to %s: %w", c.Cell, err)
+		}
+	}
+
+	return f.SaveAs(path)
+}
+
+func DeleteComment(path, sheet, cell string) error {
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", path, err)
+	}
+	defer f.Close()
+
+	if sheet == "" {
+		sheet = f.GetSheetName(0)
+	}
+
+	if err := f.DeleteComment(sheet, cell); err != nil {
+		return fmt.Errorf("deleting comment from %s: %w", cell, err)
+	}
+
+	return f.SaveAs(path)
+}
+
+func DeleteComments(path, sheet string, cells []string) error {
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", path, err)
+	}
+	defer f.Close()
+
+	if sheet == "" {
+		sheet = f.GetSheetName(0)
+	}
+
+	for _, cell := range cells {
+		if err := f.DeleteComment(sheet, cell); err != nil {
+			return fmt.Errorf("deleting comment from %s: %w", cell, err)
+		}
+	}
+
 	return f.SaveAs(path)
 }

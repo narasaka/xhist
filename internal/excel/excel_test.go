@@ -312,3 +312,181 @@ func TestRangeSize(t *testing.T) {
 		t.Errorf("expected 1x1, got %dx%d", rows, cols)
 	}
 }
+
+func TestSetAndGetComment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.xlsx")
+	if err := CreateWorkbook(path); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetComment(path, "Sheet1", "A1", "agent-1", "Source: SAP report"); err != nil {
+		t.Fatalf("SetComment: %v", err)
+	}
+
+	c, err := GetCellComment(path, "Sheet1", "A1")
+	if err != nil {
+		t.Fatalf("GetCellComment: %v", err)
+	}
+	if c == nil {
+		t.Fatal("expected comment, got nil")
+	}
+	if c.Author != "agent-1" {
+		t.Errorf("expected author 'agent-1', got %q", c.Author)
+	}
+	if c.Text != "Source: SAP report" {
+		t.Errorf("expected text 'Source: SAP report', got %q", c.Text)
+	}
+}
+
+func TestSetCommentReplace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.xlsx")
+	if err := CreateWorkbook(path); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetComment(path, "Sheet1", "A1", "agent-1", "first"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetComment(path, "Sheet1", "A1", "agent-2", "second"); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := GetCellComment(path, "Sheet1", "A1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c == nil {
+		t.Fatal("expected comment, got nil")
+	}
+	if c.Author != "agent-2" || c.Text != "second" {
+		t.Errorf("expected replaced comment, got author=%q text=%q", c.Author, c.Text)
+	}
+}
+
+func TestGetCommentsMultiple(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.xlsx")
+	if err := CreateWorkbook(path); err != nil {
+		t.Fatal(err)
+	}
+
+	comments := []Comment{
+		{Cell: "A1", Author: "agent-1", Text: "first"},
+		{Cell: "B2", Author: "agent-1", Text: "second"},
+		{Cell: "C3", Author: "agent-2", Text: "third"},
+	}
+	if err := SetComments(path, "Sheet1", comments); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := GetComments(path, "Sheet1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 comments, got %d", len(got))
+	}
+}
+
+func TestDeleteComment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.xlsx")
+	if err := CreateWorkbook(path); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetComment(path, "Sheet1", "A1", "agent-1", "to delete"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := DeleteComment(path, "Sheet1", "A1"); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := GetCellComment(path, "Sheet1", "A1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != nil {
+		t.Fatalf("expected nil after delete, got %+v", c)
+	}
+}
+
+func TestDeleteComments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.xlsx")
+	if err := CreateWorkbook(path); err != nil {
+		t.Fatal(err)
+	}
+
+	comments := []Comment{
+		{Cell: "A1", Author: "a", Text: "1"},
+		{Cell: "B1", Author: "a", Text: "2"},
+		{Cell: "C1", Author: "a", Text: "3"},
+	}
+	if err := SetComments(path, "Sheet1", comments); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := DeleteComments(path, "Sheet1", []string{"A1", "C1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := GetComments(path, "Sheet1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 remaining comment, got %d", len(got))
+	}
+	if got[0].Cell != "B1" {
+		t.Errorf("expected B1 remaining, got %s", got[0].Cell)
+	}
+}
+
+func TestGetCellCommentNotFound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.xlsx")
+	if err := CreateWorkbook(path); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := GetCellComment(path, "Sheet1", "A1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c != nil {
+		t.Fatalf("expected nil for cell without comment, got %+v", c)
+	}
+}
+
+func TestGetCommentsEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.xlsx")
+	if err := CreateWorkbook(path); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := GetComments(path, "Sheet1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected 0 comments on empty sheet, got %d", len(got))
+	}
+}
+
+func TestCommentDefaultSheet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.xlsx")
+	if err := CreateWorkbook(path); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetComment(path, "", "A1", "agent", "default sheet"); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := GetCellComment(path, "", "A1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c == nil || c.Text != "default sheet" {
+		t.Fatalf("expected comment on default sheet, got %+v", c)
+	}
+}

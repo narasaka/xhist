@@ -47,6 +47,49 @@ func writeTestXhistFile(t *testing.T, dir string) string {
 	return path
 }
 
+func writeTestXhistFileWithComments(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "test.xhist")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	w, err := NewWriter(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteHeader(1000, "data.xlsx"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteOp(Op{
+		Timestamp: 2000, Sequence: 1, Action: ActionRead,
+		Sheet: "Sheet1", Range: "A1", Message: "first",
+		NumRows: 1, NumCols: 1, Cells: []Cell{{Type: CellString, String: "x"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteCommentOp(CommentOp{
+		Timestamp: 3000, Sequence: 2, Action: ActionCommentSet,
+		Sheet: "Sheet1", Range: "A1", Message: "add comment",
+		NumEntries: 1, Entries: []CommentEntry{{Cell: "A1", Author: "alice", Text: "note"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteOp(Op{
+		Timestamp: 4000, Sequence: 3, Action: ActionWrite,
+		Sheet: "Sheet2", Range: "B1", Message: "write",
+		NumRows: 1, NumCols: 1, Cells: []Cell{{Type: CellNumber, Number: 42}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteFooter(3, 3); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestBuildAndReadIndex(t *testing.T) {
 	dir := t.TempDir()
 	xhistPath := writeTestXhistFile(t, dir)
@@ -134,26 +177,31 @@ func TestIndexEntryByteLayout(t *testing.T) {
 		t.Fatalf("first entry offset = %d, should be > preamble", offset)
 	}
 
-	timestamp := int64(binary.LittleEndian.Uint64(entryData[8:16]))
+	opcode := entryData[8]
+	if opcode != OpcodeOp {
+		t.Fatalf("opcode = 0x%02x, want OpcodeOp", opcode)
+	}
+
+	timestamp := int64(binary.LittleEndian.Uint64(entryData[9:17]))
 	if timestamp != 2000 {
 		t.Fatalf("timestamp = %d, want 2000", timestamp)
 	}
 
-	seq := binary.LittleEndian.Uint32(entryData[16:20])
+	seq := binary.LittleEndian.Uint32(entryData[17:21])
 	if seq != 1 {
 		t.Fatalf("sequence = %d, want 1", seq)
 	}
 
-	action := entryData[20]
+	action := entryData[21]
 	if action != ActionRead {
 		t.Fatalf("action = %d, want ActionRead", action)
 	}
 
-	sheetLen := binary.LittleEndian.Uint16(entryData[21:23])
+	sheetLen := binary.LittleEndian.Uint16(entryData[22:24])
 	if sheetLen != 6 {
 		t.Fatalf("sheetLen = %d, want 6", sheetLen)
 	}
-	sheet := string(entryData[23 : 23+sheetLen])
+	sheet := string(entryData[24 : 24+sheetLen])
 	if sheet != "Sheet1" {
 		t.Fatalf("sheet = %q", sheet)
 	}
@@ -245,5 +293,79 @@ func TestIndexRebuild(t *testing.T) {
 			entries1[i].Sheet != entries2[i].Sheet {
 			t.Fatalf("entry %d mismatch after rebuild", i)
 		}
+	}
+}
+
+func TestBuildAndReadIndexWithComments(t *testing.T) {
+	dir := t.TempDir()
+	xhistPath := writeTestXhistFileWithComments(t, dir)
+
+	if err := BuildIndex(xhistPath); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := ReadIndex(xhistPath + ".idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(entries) != 3 {
+		t.Fatalf("entry count = %d, want 3", len(entries))
+	}
+
+	if entries[0].Opcode != OpcodeOp || entries[0].Sequence != 1 {
+		t.Fatalf("entry 0 = %+v", entries[0])
+	}
+	if entries[1].Opcode != OpcodeCommentOp || entries[1].Sequence != 2 || entries[1].Action != ActionCommentSet {
+		t.Fatalf("entry 1 = %+v", entries[1])
+	}
+	if entries[2].Opcode != OpcodeOp || entries[2].Sequence != 3 || entries[2].Sheet != "Sheet2" {
+		t.Fatalf("entry 2 = %+v", entries[2])
+	}
+}
+
+func TestIndexEntryV2ByteLayout(t *testing.T) {
+	dir := t.TempDir()
+	xhistPath := writeTestXhistFileWithComments(t, dir)
+	BuildIndex(xhistPath)
+
+	idxData, err := os.ReadFile(xhistPath + ".idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if idxData[6] != 0x02 {
+		t.Fatalf("index version = 0x%02x, want 0x02", idxData[6])
+	}
+
+	entryCount := binary.LittleEndian.Uint32(idxData[15:19])
+	if entryCount != 3 {
+		t.Fatalf("entryCount = %d, want 3", entryCount)
+	}
+
+	// Find the CommentOp entry (second entry)
+	// First entry: 24 fixed bytes + len("Sheet1") = 30 bytes
+	firstEntrySize := 24 + 6
+	secondEntryStart := IndexPreambleSize + firstEntrySize
+	entry2 := idxData[secondEntryStart:]
+
+	opcode := entry2[8]
+	if opcode != OpcodeCommentOp {
+		t.Fatalf("second entry opcode = 0x%02x, want OpcodeCommentOp", opcode)
+	}
+
+	ts := int64(binary.LittleEndian.Uint64(entry2[9:17]))
+	if ts != 3000 {
+		t.Fatalf("second entry timestamp = %d, want 3000", ts)
+	}
+
+	seq := binary.LittleEndian.Uint32(entry2[17:21])
+	if seq != 2 {
+		t.Fatalf("second entry sequence = %d, want 2", seq)
+	}
+
+	action := entry2[21]
+	if action != ActionCommentSet {
+		t.Fatalf("second entry action = %d, want ActionCommentSet", action)
 	}
 }
