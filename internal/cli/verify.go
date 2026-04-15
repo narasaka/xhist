@@ -1,0 +1,69 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+
+	"github.com/prosights/xhist/internal/format"
+	"github.com/urfave/cli/v3"
+)
+
+func newVerifyCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "verify",
+		Usage: "Check integrity of the .xhist file",
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			errW := cmdErr(cmd)
+			outW := cmdOut(cmd)
+			xlsxPath := cmd.Args().Get(0)
+			if xlsxPath == "" {
+				return outputErrorTo(errW, "missing required argument: <file.xlsx>")
+			}
+
+			xhp := xhistPath(xlsxPath)
+			f, err := os.Open(xhp)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("opening %s: %v", xhp, err))
+			}
+			defer f.Close()
+
+			rd, err := format.NewReader(f)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("reading %s: %v", xhp, err))
+			}
+
+			var records, ops int
+			for {
+				rec, err := rd.Next()
+				if err != nil {
+					if err == io.EOF {
+						break
+					}
+					if corr, ok := err.(*format.ErrCorruption); ok {
+						result := map[string]any{
+							"ok":                false,
+							"records_valid":     records,
+							"corruption_offset": corr.Offset,
+							"error":             corr.Error(),
+						}
+						outputJSON(outW, result)
+						return cli.Exit("corruption detected", 1)
+					}
+					return outputErrorTo(errW, fmt.Sprintf("reading record: %v", err))
+				}
+				records++
+				if rec.Opcode == format.OpcodeOp {
+					ops++
+				}
+			}
+
+			return outputJSON(outW, map[string]any{
+				"ok":      true,
+				"records": records,
+				"ops":     ops,
+			})
+		},
+	}
+}

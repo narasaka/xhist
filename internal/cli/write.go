@@ -1,0 +1,173 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/prosights/xhist/internal/excel"
+	"github.com/prosights/xhist/internal/format"
+	"github.com/prosights/xhist/internal/lock"
+	"github.com/urfave/cli/v3"
+)
+
+func newWriteCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "write",
+		Usage: "Write cells to Excel and log a WRITE op",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "message", Aliases: []string{"m"}, Usage: "Why this write was performed (required)", Required: true},
+			&cli.StringFlag{Name: "json", Usage: "Values as JSON array of arrays"},
+			&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Read values from a JSON file"},
+			&cli.BoolFlag{Name: "stdin", Usage: "Read values from stdin"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			errW := cmdErr(cmd)
+			xlsxPath := cmd.Args().Get(0)
+			if xlsxPath == "" {
+				return outputErrorTo(errW, "missing required argument: <file.xlsx>")
+			}
+			rangeRef := cmd.Args().Get(1)
+			if rangeRef == "" {
+				return outputErrorTo(errW, "missing required argument: <range>")
+			}
+
+			xhp, err := ensureInit(xlsxPath)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("init: %v", err))
+			}
+
+			sheet, topLeft, bottomRight, err := excel.ParseRange(rangeRef)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("parsing range: %v", err))
+			}
+
+			isSingle := topLeft == bottomRight
+			var cells [][]format.Cell
+
+			if isSingle {
+				rawVal := cmd.Args().Get(2)
+				cell := parseScalarValue(rawVal)
+				cells = [][]format.Cell{{cell}}
+			} else {
+				jsonData, err := resolveJSONInput(cmd)
+				if err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("reading input: %v", err))
+				}
+				cells, err = parseJSONGrid(jsonData)
+				if err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("parsing values: %v", err))
+				}
+			}
+
+			ul, err := lock.Acquire(ctx, xhp, xlsxPath)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("acquiring lock: %v", err))
+			}
+			defer ul.Release()
+
+			if err := excel.WriteCells(xlsxPath, sheet, topLeft, cells); err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("writing cells: %v", err))
+			}
+
+			seq, err := lastSequence(xhp)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("reading sequence: %v", err))
+			}
+			seq++
+
+			rows := len(cells)
+			cols := 0
+			if rows > 0 {
+				cols = len(cells[0])
+			}
+			var flat []format.Cell
+			for _, row := range cells {
+				flat = append(flat, row...)
+			}
+
+			displayRange := topLeft
+			if topLeft != bottomRight {
+				displayRange = topLeft + ":" + bottomRight
+			}
+
+			f, w, err := openLogForAppend(xhp)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("opening log: %v", err))
+			}
+			defer f.Close()
+
+			op := format.Op{
+				Timestamp: time.Now().UnixMilli(),
+				Sequence:  seq,
+				Action:    format.ActionWrite,
+				Sheet:     sheet,
+				Range:     displayRange,
+				Message:   cmd.String("message"),
+				NumRows:   uint32(rows),
+				NumCols:   uint32(cols),
+				Cells:     flat,
+			}
+			if err := w.WriteOp(op); err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("writing op: %v", err))
+			}
+
+			cellCount := 0
+			for _, row := range cells {
+				cellCount += len(row)
+			}
+			return outputJSON(cmdOut(cmd), map[string]any{"seq": seq, "cells_written": cellCount})
+		},
+	}
+}
+
+func resolveJSONInput(cmd *cli.Command) ([]byte, error) {
+	if v := cmd.String("json"); v != "" {
+		return []byte(v), nil
+	}
+	if v := cmd.String("file"); v != "" {
+		return os.ReadFile(v)
+	}
+	if cmd.Bool("stdin") {
+		return io.ReadAll(os.Stdin)
+	}
+	return nil, fmt.Errorf("range write requires --json, --file, or --stdin")
+}
+
+func parseJSONGrid(data []byte) ([][]format.Cell, error) {
+	var raw [][]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	grid := make([][]format.Cell, len(raw))
+	for r, row := range raw {
+		grid[r] = make([]format.Cell, len(row))
+		for c, v := range row {
+			grid[r][c] = jsonToCell(v)
+		}
+	}
+	return grid, nil
+}
+
+func parseScalarValue(s string) format.Cell {
+	if s == "" {
+		return format.Cell{Type: format.CellEmpty}
+	}
+	if len(s) > 0 && s[0] == '=' {
+		return format.Cell{Type: format.CellFormula, FormulaText: s[1:]}
+	}
+	if n, err := strconv.ParseFloat(s, 64); err == nil {
+		return format.Cell{Type: format.CellNumber, Number: n}
+	}
+	if s == "true" {
+		return format.Cell{Type: format.CellBool, Bool: true}
+	}
+	if s == "false" {
+		return format.Cell{Type: format.CellBool, Bool: false}
+	}
+	return format.Cell{Type: format.CellString, String: s}
+}
