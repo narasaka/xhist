@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/prosights/xhist/internal/format"
@@ -18,12 +17,20 @@ func newInfoCmd() *cli.Command {
 		Usage: "Show metadata and stats about the history file",
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			errW := cmdErr(cmd)
-			xlsxPath := cmd.Args().Get(0)
-			if xlsxPath == "" {
-				return outputErrorTo(errW, "missing required argument: <file.xlsx>")
+
+			xhp, wsRoot, err := resolveWorkspaceReadOnly(cmd)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("workspace: %v", err))
 			}
 
-			xhp := xhistPath(xlsxPath)
+			var fileFilter string
+			if xlsxArg := cmd.Args().Get(0); xlsxArg != "" {
+				fileFilter, err = resolveTargetFile(wsRoot, xlsxArg)
+				if err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("resolving file: %v", err))
+				}
+			}
+
 			f, err := os.Open(xhp)
 			if err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("opening %s: %v", xhp, err))
@@ -36,7 +43,7 @@ func newInfoCmd() *cli.Command {
 			}
 
 			var (
-				target         string
+				workspaceName  string
 				created        int64
 				ops            int
 				reads          int
@@ -46,6 +53,7 @@ func newInfoCmd() *cli.Command {
 				commentDeletes int
 				lastOpTS       int64
 				sheetsMap      = map[string]bool{}
+				filesMap       = map[string]bool{}
 				hasFooter      bool
 				metadata       = map[string]string{}
 			)
@@ -60,9 +68,18 @@ func newInfoCmd() *cli.Command {
 				}
 				switch v := rec.Parsed.(type) {
 				case format.Header:
-					target = v.TargetFile
+					workspaceName = v.WorkspaceName
+					if workspaceName == "" {
+						workspaceName = v.TargetFile
+					}
 					created = v.CreatedAt
 				case format.Op:
+					if v.TargetFile != "" {
+						filesMap[v.TargetFile] = true
+					}
+					if fileFilter != "" && v.TargetFile != fileFilter {
+						continue
+					}
 					ops++
 					if v.Action == format.ActionRead {
 						reads++
@@ -76,6 +93,12 @@ func newInfoCmd() *cli.Command {
 						sheetsMap[v.Sheet] = true
 					}
 				case format.CommentOp:
+					if v.TargetFile != "" {
+						filesMap[v.TargetFile] = true
+					}
+					if fileFilter != "" && v.TargetFile != fileFilter {
+						continue
+					}
 					switch v.Action {
 					case format.ActionCommentSet:
 						commentSets++
@@ -102,6 +125,11 @@ func newInfoCmd() *cli.Command {
 				sheets = append(sheets, s)
 			}
 
+			files := make([]string, 0, len(filesMap))
+			for f := range filesMap {
+				files = append(files, f)
+			}
+
 			idxPath := xhp + ".idx"
 			indexStale := false
 			if _, err := os.Stat(idxPath); err == nil {
@@ -113,17 +141,14 @@ func newInfoCmd() *cli.Command {
 				indexStale = true
 			}
 
-			if target == "" {
-				target = filepath.Base(xlsxPath)
-			}
-
 			result := map[string]any{
-				"target":         target,
+				"workspace":      workspaceName,
 				"created":        time.UnixMilli(created).UTC().Format(time.RFC3339),
 				"ops":            ops,
 				"reads":          reads,
 				"writes":         writes,
 				"sheets_touched": sheets,
+				"files":          files,
 				"has_footer":     hasFooter,
 				"index_stale":    indexStale,
 				"metadata":       metadata,

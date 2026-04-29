@@ -10,12 +10,17 @@ func buildRootCommand() *cli.Command {
 	return &cli.Command{
 		Name:    "xhist",
 		Usage:   "Git for Excel — append-only operation log for spreadsheets",
-		Version: "0.1.0",
+		Version: "0.2.0",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "human",
 				Aliases: []string{"H"},
 				Usage:   "Human-readable output instead of JSON",
+			},
+			&cli.StringFlag{
+				Name:    "workspace",
+				Aliases: []string{"w"},
+				Usage:   "Path to workspace .xhist file (overrides auto-discovery)",
 			},
 		},
 		Commands: []*cli.Command{
@@ -31,6 +36,7 @@ func buildRootCommand() *cli.Command {
 			newRepairCmd(),
 			newReindexCmd(),
 			newCommentCmd(),
+			newMigrateCmd(),
 		},
 	}
 }

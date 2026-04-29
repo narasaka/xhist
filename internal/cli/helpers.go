@@ -1,48 +1,135 @@
 package cli
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/prosights/xhist/internal/excel"
 	"github.com/prosights/xhist/internal/format"
+	"github.com/prosights/xhist/internal/workspace"
+	"github.com/urfave/cli/v3"
 )
 
-func xhistPath(xlsxPath string) string {
-	ext := filepath.Ext(xlsxPath)
-	return strings.TrimSuffix(xlsxPath, ext) + ".xhist"
-}
-
-func ensureInit(xlsxPath string) (string, error) {
-	xhp := xhistPath(xlsxPath)
-
-	if _, err := os.Stat(xlsxPath); os.IsNotExist(err) {
-		if err := excel.CreateWorkbook(xlsxPath); err != nil {
-			return "", err
+func resolveWorkspace(cmd *cli.Command) (string, string, error) {
+	if ws := cmd.Root().String("workspace"); ws != "" {
+		if !strings.HasSuffix(ws, ".xhist") {
+			return "", "", fmt.Errorf("workspace path must end with .xhist: %s", ws)
 		}
+		abs, err := filepath.Abs(ws)
+		if err != nil {
+			return "", "", err
+		}
+		if _, err := os.Stat(abs); os.IsNotExist(err) {
+			f, err := os.Create(abs)
+			if err != nil {
+				return "", "", fmt.Errorf("creating workspace: %v", err)
+			}
+			defer f.Close()
+			w, err := format.NewWriter(f)
+			if err != nil {
+				return "", "", err
+			}
+			name := strings.TrimSuffix(filepath.Base(abs), ".xhist")
+			if err := w.WriteHeader(time.Now().UnixMilli(), name); err != nil {
+				return "", "", err
+			}
+		}
+		return abs, filepath.Dir(abs), nil
 	}
 
-	if _, err := os.Stat(xhp); err == nil {
-		return xhp, nil
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", "", fmt.Errorf("getting cwd: %v", err)
 	}
 
+	found, err := workspace.Discover(cwd)
+	if err == nil {
+		abs, _ := filepath.Abs(found)
+		return abs, filepath.Dir(abs), nil
+	}
+
+	name := workspace.DefaultName(cwd)
+	xhp := filepath.Join(cwd, name+".xhist")
 	f, err := os.Create(xhp)
 	if err != nil {
-		return "", err
+		return "", "", fmt.Errorf("creating workspace: %v", err)
+	}
+	defer f.Close()
+	w, err := format.NewWriter(f)
+	if err != nil {
+		return "", "", err
+	}
+	if err := w.WriteHeader(time.Now().UnixMilli(), name); err != nil {
+		return "", "", err
+	}
+	return xhp, cwd, nil
+}
+
+func resolveWorkspaceReadOnly(cmd *cli.Command) (string, string, error) {
+	if ws := cmd.Root().String("workspace"); ws != "" {
+		if !strings.HasSuffix(ws, ".xhist") {
+			return "", "", fmt.Errorf("workspace path must end with .xhist: %s", ws)
+		}
+		abs, err := filepath.Abs(ws)
+		if err != nil {
+			return "", "", err
+		}
+		if _, err := os.Stat(abs); os.IsNotExist(err) {
+			return "", "", fmt.Errorf("workspace file not found: %s", abs)
+		}
+		return abs, filepath.Dir(abs), nil
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", "", fmt.Errorf("getting cwd: %v", err)
+	}
+
+	found, err := workspace.Discover(cwd)
+	if err != nil {
+		return "", "", fmt.Errorf("no workspace found: %v", err)
+	}
+	abs, _ := filepath.Abs(found)
+	return abs, filepath.Dir(abs), nil
+}
+
+func resolveTargetFile(workspaceRoot, xlsxPath string) (string, error) {
+	return workspace.RelativePath(workspaceRoot, xlsxPath)
+}
+
+func requireV2(xhistPath string) error {
+	f, err := os.Open(xhistPath)
+	if err != nil {
+		return err
 	}
 	defer f.Close()
 
-	w, err := format.NewWriter(f)
+	var buf [7]byte
+	if _, err := io.ReadFull(f, buf[:]); err != nil {
+		return fmt.Errorf("reading preamble: %v", err)
+	}
+	if buf[6] == 0x01 {
+		return fmt.Errorf("v1 log detected — run `xhist migrate` to upgrade")
+	}
+	return nil
+}
+
+func openWorkspaceForAppend(cmd *cli.Command) (*os.File, *format.Writer, string, error) {
+	xhp, wsRoot, err := resolveWorkspace(cmd)
 	if err != nil {
-		return "", err
+		return nil, nil, "", err
 	}
-	if err := w.WriteHeader(time.Now().UnixMilli(), filepath.Base(xlsxPath)); err != nil {
-		return "", err
+	if err := requireV2(xhp); err != nil {
+		return nil, nil, "", err
 	}
-	return xhp, nil
+	f, w, err := openLogForAppend(xhp)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return f, w, wsRoot, nil
 }
 
 func lastSequence(xhistPath string) (uint32, error) {

@@ -28,14 +28,26 @@ func TestConstants(t *testing.T) {
 	if Version != 0x01 {
 		t.Fatalf("Version = %d, want 1", Version)
 	}
+	if VersionV1 != 0x01 {
+		t.Fatalf("VersionV1 = %d, want 1", VersionV1)
+	}
+	if VersionV2 != 0x02 {
+		t.Fatalf("VersionV2 = %d, want 2", VersionV2)
+	}
+	if VersionLatest != VersionV2 {
+		t.Fatalf("VersionLatest = %d, want VersionV2", VersionLatest)
+	}
 	if PreambleSize != 7 {
 		t.Fatalf("PreambleSize = %d, want 7", PreambleSize)
 	}
 	if IndexPreambleSize != 19 {
 		t.Fatalf("IndexPreambleSize = %d, want 19", IndexPreambleSize)
 	}
-	if IndexVersion != 0x02 {
-		t.Fatalf("IndexVersion = %d, want 2", IndexVersion)
+	if IndexVersion != IndexVersionV3 {
+		t.Fatalf("IndexVersion = %d, want IndexVersionV3", IndexVersion)
+	}
+	if IndexVersionV3 != 0x03 {
+		t.Fatalf("IndexVersionV3 = %d, want 3", IndexVersionV3)
 	}
 	if RecordFramingOverhead != 9 {
 		t.Fatalf("RecordFramingOverhead = %d, want 9", RecordFramingOverhead)

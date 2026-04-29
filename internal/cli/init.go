@@ -5,17 +5,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/prosights/xhist/internal/excel"
 	"github.com/prosights/xhist/internal/format"
+	"github.com/prosights/xhist/internal/workspace"
 	"github.com/urfave/cli/v3"
 )
 
 func newInitCmd() *cli.Command {
 	return &cli.Command{
 		Name:  "init",
-		Usage: "Create a new .xhist file for an Excel file",
+		Usage: "Create a new workspace .xhist file",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "agent", Usage: "Write agent.name metadata"},
 			&cli.StringFlag{Name: "model", Usage: "Write agent.model metadata"},
@@ -24,21 +25,32 @@ func newInitCmd() *cli.Command {
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			errW := cmdErr(cmd)
-			xlsxPath := cmd.Args().Get(0)
-			if xlsxPath == "" {
-				return outputErrorTo(errW, "missing required argument: <file.xlsx>")
+
+			name := cmd.Args().Get(0)
+			cwd, err := os.Getwd()
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("getting cwd: %v", err))
+			}
+			if name == "" {
+				name = workspace.DefaultName(cwd)
 			}
 
-			xhp := xhistPath(xlsxPath)
+			if ws := cmd.Root().String("workspace"); ws != "" {
+				if !strings.HasSuffix(ws, ".xhist") {
+					return outputErrorTo(errW, fmt.Sprintf("workspace path must end with .xhist: %s", ws))
+				}
+				abs, err := filepath.Abs(ws)
+				if err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("resolving path: %v", err))
+				}
+				name = strings.TrimSuffix(filepath.Base(abs), ".xhist")
+				cwd = filepath.Dir(abs)
+			}
+
+			xhp := filepath.Join(cwd, name+".xhist")
 
 			if _, err := os.Stat(xhp); err == nil && !cmd.Bool("force") {
 				return outputErrorTo(errW, fmt.Sprintf("%s already exists (use --force to overwrite)", xhp))
-			}
-
-			if _, err := os.Stat(xlsxPath); os.IsNotExist(err) {
-				if err := excel.CreateWorkbook(xlsxPath); err != nil {
-					return outputErrorTo(errW, fmt.Sprintf("creating workbook: %v", err))
-				}
 			}
 
 			f, err := os.Create(xhp)
@@ -52,7 +64,7 @@ func newInitCmd() *cli.Command {
 				return outputErrorTo(errW, fmt.Sprintf("writing preamble: %v", err))
 			}
 
-			if err := w.WriteHeader(time.Now().UnixMilli(), filepath.Base(xlsxPath)); err != nil {
+			if err := w.WriteHeader(time.Now().UnixMilli(), name); err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("writing header: %v", err))
 			}
 

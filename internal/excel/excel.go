@@ -53,6 +53,13 @@ func ReadCells(path, sheet, topLeft, bottomRight string) ([][]format.Cell, error
 	return grid, nil
 }
 
+// rawOpt forces excelize to return the cell's RAW stored value instead of the
+// number-formatted display value. Without this, cells with number formats
+// (accounting, thousands separator, etc.) come back as strings like "(456)"
+// or "231,521", which breaks numeric round-trips and misleads agents that
+// compare read values against what they wrote.
+var rawOpt = excelize.Options{RawCellValue: true}
+
 func readOneCell(f *excelize.File, sheet, ref string) (format.Cell, error) {
 	ct, err := f.GetCellType(sheet, ref)
 	if err != nil {
@@ -61,7 +68,7 @@ func readOneCell(f *excelize.File, sheet, ref string) (format.Cell, error) {
 
 	switch ct {
 	case excelize.CellTypeUnset:
-		val, err := f.GetCellValue(sheet, ref)
+		val, err := f.GetCellValue(sheet, ref, rawOpt)
 		if err != nil {
 			return format.Cell{}, err
 		}
@@ -75,14 +82,17 @@ func readOneCell(f *excelize.File, sheet, ref string) (format.Cell, error) {
 		return format.Cell{Type: format.CellNumber, Number: n}, nil
 
 	case excelize.CellTypeBool:
-		val, err := f.GetCellValue(sheet, ref)
+		val, err := f.GetCellValue(sheet, ref, rawOpt)
 		if err != nil {
 			return format.Cell{}, err
 		}
-		return format.Cell{Type: format.CellBool, Bool: strings.EqualFold(val, "TRUE")}, nil
+		// In raw mode excelize returns "1"/"0" for booleans; handle both raw
+		// and legacy "TRUE"/"FALSE" forms defensively.
+		isTrue := val == "1" || strings.EqualFold(val, "TRUE")
+		return format.Cell{Type: format.CellBool, Bool: isTrue}, nil
 
 	case excelize.CellTypeNumber:
-		val, err := f.GetCellValue(sheet, ref)
+		val, err := f.GetCellValue(sheet, ref, rawOpt)
 		if err != nil {
 			return format.Cell{}, err
 		}
@@ -93,7 +103,7 @@ func readOneCell(f *excelize.File, sheet, ref string) (format.Cell, error) {
 		return format.Cell{Type: format.CellNumber, Number: n}, nil
 
 	case excelize.CellTypeSharedString, excelize.CellTypeInlineString:
-		val, err := f.GetCellValue(sheet, ref)
+		val, err := f.GetCellValue(sheet, ref, rawOpt)
 		if err != nil {
 			return format.Cell{}, err
 		}
@@ -104,17 +114,19 @@ func readOneCell(f *excelize.File, sheet, ref string) (format.Cell, error) {
 		if err != nil {
 			return format.Cell{}, err
 		}
-		cachedVal, _ := f.GetCellValue(sheet, ref)
+		cachedVal, _ := f.GetCellValue(sheet, ref, rawOpt)
 		cached := &format.Cell{Type: format.CellString, String: cachedVal}
 		if n, parseErr := strconv.ParseFloat(cachedVal, 64); parseErr == nil {
 			cached = &format.Cell{Type: format.CellNumber, Number: n}
-		} else if strings.EqualFold(cachedVal, "TRUE") || strings.EqualFold(cachedVal, "FALSE") {
-			cached = &format.Cell{Type: format.CellBool, Bool: strings.EqualFold(cachedVal, "TRUE")}
+		} else if cachedVal == "1" || strings.EqualFold(cachedVal, "TRUE") {
+			cached = &format.Cell{Type: format.CellBool, Bool: true}
+		} else if cachedVal == "0" || strings.EqualFold(cachedVal, "FALSE") {
+			cached = &format.Cell{Type: format.CellBool, Bool: false}
 		}
 		return format.Cell{Type: format.CellFormula, FormulaText: formula, CachedValue: cached}, nil
 
 	case excelize.CellTypeError:
-		val, err := f.GetCellValue(sheet, ref)
+		val, err := f.GetCellValue(sheet, ref, rawOpt)
 		if err != nil {
 			return format.Cell{}, err
 		}

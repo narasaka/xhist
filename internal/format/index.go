@@ -8,12 +8,13 @@ import (
 
 // IndexEntry is one entry in the sidecar index, corresponding to an Op record.
 type IndexEntry struct {
-	Offset    uint64
-	Opcode    uint8
-	Timestamp int64
-	Sequence  uint32
-	Action    uint8
-	Sheet     string
+	Offset     uint64
+	Opcode     uint8
+	Timestamp  int64
+	Sequence   uint32
+	Action     uint8
+	TargetFile string
+	Sheet      string
 }
 
 // BuildIndex scans the xhist log file and writes a sidecar .xhist.idx file.
@@ -48,22 +49,24 @@ func BuildIndex(xhistPath string) error {
 		if rec.Opcode == OpcodeOp {
 			op := rec.Parsed.(Op)
 			entries = append(entries, IndexEntry{
-				Offset:    uint64(recordOffset),
-				Opcode:    OpcodeOp,
-				Timestamp: op.Timestamp,
-				Sequence:  op.Sequence,
-				Action:    op.Action,
-				Sheet:     op.Sheet,
+				Offset:     uint64(recordOffset),
+				Opcode:     OpcodeOp,
+				Timestamp:  op.Timestamp,
+				Sequence:   op.Sequence,
+				Action:     op.Action,
+				TargetFile: op.TargetFile,
+				Sheet:      op.Sheet,
 			})
 		} else if rec.Opcode == OpcodeCommentOp {
 			cop := rec.Parsed.(CommentOp)
 			entries = append(entries, IndexEntry{
-				Offset:    uint64(recordOffset),
-				Opcode:    OpcodeCommentOp,
-				Timestamp: cop.Timestamp,
-				Sequence:  cop.Sequence,
-				Action:    cop.Action,
-				Sheet:     cop.Sheet,
+				Offset:     uint64(recordOffset),
+				Opcode:     OpcodeCommentOp,
+				Timestamp:  cop.Timestamp,
+				Sequence:   cop.Sequence,
+				Action:     cop.Action,
+				TargetFile: cop.TargetFile,
+				Sheet:      cop.Sheet,
 			})
 		}
 	}
@@ -99,15 +102,22 @@ func writeIndexPreamble(w io.Writer, logSize uint64, entryCount uint32) error {
 }
 
 func writeIndexEntry(w io.Writer, e IndexEntry) error {
+	fileBytes := []byte(e.TargetFile)
 	sheetBytes := []byte(e.Sheet)
-	buf := make([]byte, 8+1+8+4+1+2+len(sheetBytes))
+	buf := make([]byte, 8+1+8+4+1+2+len(fileBytes)+2+len(sheetBytes))
 	binary.LittleEndian.PutUint64(buf[0:8], e.Offset)
 	buf[8] = e.Opcode
 	binary.LittleEndian.PutUint64(buf[9:17], uint64(e.Timestamp))
 	binary.LittleEndian.PutUint32(buf[17:21], e.Sequence)
 	buf[21] = e.Action
-	binary.LittleEndian.PutUint16(buf[22:24], uint16(len(sheetBytes)))
-	copy(buf[24:], sheetBytes)
+	off := 22
+	binary.LittleEndian.PutUint16(buf[off:off+2], uint16(len(fileBytes)))
+	off += 2
+	copy(buf[off:], fileBytes)
+	off += len(fileBytes)
+	binary.LittleEndian.PutUint16(buf[off:off+2], uint16(len(sheetBytes)))
+	off += 2
+	copy(buf[off:], sheetBytes)
 	_, err := w.Write(buf)
 	return err
 }
@@ -146,7 +156,19 @@ func ReadIndex(idxPath string) ([]IndexEntry, error) {
 			Sequence:  binary.LittleEndian.Uint32(fixed[17:21]),
 			Action:    fixed[21],
 		}
-		sheetLen := binary.LittleEndian.Uint16(fixed[22:24])
+		fileLen := binary.LittleEndian.Uint16(fixed[22:24])
+		if fileLen > 0 {
+			fileBuf := make([]byte, fileLen)
+			if _, err := io.ReadFull(f, fileBuf); err != nil {
+				return nil, err
+			}
+			e.TargetFile = string(fileBuf)
+		}
+		var sheetLenBuf [2]byte
+		if _, err := io.ReadFull(f, sheetLenBuf[:]); err != nil {
+			return nil, err
+		}
+		sheetLen := binary.LittleEndian.Uint16(sheetLenBuf[:])
 		if sheetLen > 0 {
 			sheetBuf := make([]byte, sheetLen)
 			if _, err := io.ReadFull(f, sheetBuf); err != nil {

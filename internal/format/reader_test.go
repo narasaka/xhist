@@ -67,7 +67,7 @@ func TestReaderPreambleValidation(t *testing.T) {
 func TestReaderBadMagic(t *testing.T) {
 	data := make([]byte, PreambleSize)
 	copy(data, []byte("WRONG\x00"))
-	data[6] = Version
+	data[6] = VersionLatest
 	_, err := NewReader(bytes.NewReader(data))
 	if err == nil {
 		t.Fatal("expected error")
@@ -115,7 +115,7 @@ func TestReaderAllRecords(t *testing.T) {
 		t.Fatalf("expected header, got 0x%02x", rec.Opcode)
 	}
 	hdr := rec.Parsed.(Header)
-	if hdr.CreatedAt != 1000 || hdr.TargetFile != "test.xlsx" {
+	if hdr.CreatedAt != 1000 || hdr.WorkspaceName != "test.xlsx" {
 		t.Fatalf("header = %+v", hdr)
 	}
 
@@ -222,10 +222,9 @@ func TestReaderPartialTrailingRecord(t *testing.T) {
 }
 
 func TestReaderPartialHeader(t *testing.T) {
-	// only preamble + 3 bytes of a record (incomplete opcode+length)
 	data := make([]byte, PreambleSize+3)
 	copy(data[:6], Magic[:])
-	data[6] = Version
+	data[6] = VersionLatest
 	data[7] = OpcodeHeader
 	data[8] = 0x10
 	data[9] = 0x00
@@ -547,5 +546,219 @@ func TestRecordFrameOverhead(t *testing.T) {
 	storedLen := binary.LittleEndian.Uint32(frame[1:5])
 	if storedLen != 4 {
 		t.Fatalf("stored length = %d, want 4", storedLen)
+	}
+}
+
+func TestV2RoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	w, err := NewWriter(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteHeader(1000, "my-workspace"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteOp(Op{
+		TargetFile: "data.xlsx",
+		Timestamp:  2000,
+		Sequence:   1,
+		Action:     ActionRead,
+		Sheet:      "Sheet1",
+		Range:      "A1",
+		Message:    "read",
+		NumRows:    1,
+		NumCols:    1,
+		Cells:      []Cell{{Type: CellString, String: "val"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteCommentOp(CommentOp{
+		TargetFile: "data.xlsx",
+		Timestamp:  3000,
+		Sequence:   2,
+		Action:     ActionCommentSet,
+		Sheet:      "Sheet1",
+		Range:      "A1",
+		Message:    "comment",
+		NumEntries: 1,
+		Entries:    []CommentEntry{{Cell: "A1", Author: "bob", Text: "note"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rd, err := NewReader(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rd.Version() != VersionV2 {
+		t.Fatalf("version = %d, want VersionV2", rd.Version())
+	}
+
+	rec, _ := rd.Next()
+	hdr := rec.Parsed.(Header)
+	if hdr.WorkspaceName != "my-workspace" || hdr.CreatedAt != 1000 {
+		t.Fatalf("header = %+v", hdr)
+	}
+
+	rec, _ = rd.Next()
+	op := rec.Parsed.(Op)
+	if op.TargetFile != "data.xlsx" {
+		t.Fatalf("op.TargetFile = %q, want data.xlsx", op.TargetFile)
+	}
+	if op.Timestamp != 2000 || op.Sheet != "Sheet1" {
+		t.Fatalf("op = %+v", op)
+	}
+
+	rec, _ = rd.Next()
+	cop := rec.Parsed.(CommentOp)
+	if cop.TargetFile != "data.xlsx" {
+		t.Fatalf("cop.TargetFile = %q, want data.xlsx", cop.TargetFile)
+	}
+	if cop.Timestamp != 3000 || cop.Entries[0].Text != "note" {
+		t.Fatalf("cop = %+v", cop)
+	}
+}
+
+func buildV1Blob(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+
+	// v1 preamble
+	var preamble [PreambleSize]byte
+	copy(preamble[:6], Magic[:])
+	preamble[6] = VersionV1
+	buf.Write(preamble[:])
+
+	// v1 header: CreatedAt(8) + lpstring(TargetFile)
+	hdrPayload := encodeHeaderPayload(Header{CreatedAt: 1000, TargetFile: "budget.xlsx"})
+	buf.Write(encodeRecord(OpcodeHeader, hdrPayload))
+
+	// v1 op: no TargetFile prefix
+	var opBuf bytes.Buffer
+	var tmp [8]byte
+	binary.LittleEndian.PutUint64(tmp[:], uint64(2000))
+	opBuf.Write(tmp[:])
+	binary.LittleEndian.PutUint32(tmp[:4], 1)
+	opBuf.Write(tmp[:4])
+	opBuf.WriteByte(ActionRead)
+	encodeLPString(&opBuf, "Sheet1")
+	encodeLPString(&opBuf, "A1")
+	encodeLPString(&opBuf, "read it")
+	binary.LittleEndian.PutUint32(tmp[:4], 1)
+	opBuf.Write(tmp[:4])
+	binary.LittleEndian.PutUint32(tmp[:4], 1)
+	opBuf.Write(tmp[:4])
+	EncodeCell(&opBuf, Cell{Type: CellString, String: "hello"})
+	opBuf.WriteByte(0)
+	buf.Write(encodeRecord(OpcodeOp, opBuf.Bytes()))
+
+	return buf.Bytes()
+}
+
+func TestV1BackwardCompat(t *testing.T) {
+	data := buildV1Blob(t)
+
+	rd, err := NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rd.Version() != VersionV1 {
+		t.Fatalf("version = %d, want VersionV1", rd.Version())
+	}
+
+	rec, err := rd.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr := rec.Parsed.(Header)
+	if hdr.TargetFile != "budget.xlsx" || hdr.CreatedAt != 1000 {
+		t.Fatalf("v1 header = %+v", hdr)
+	}
+
+	rec, err = rd.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := rec.Parsed.(Op)
+	if op.TargetFile != "budget.xlsx" {
+		t.Fatalf("v1 op.TargetFile = %q, want budget.xlsx (backfilled from header)", op.TargetFile)
+	}
+	if op.Timestamp != 2000 || op.Sheet != "Sheet1" || op.Cells[0].String != "hello" {
+		t.Fatalf("v1 op = %+v", op)
+	}
+}
+
+func TestV1BackwardCompatCommentOp(t *testing.T) {
+	var buf bytes.Buffer
+
+	var preamble [PreambleSize]byte
+	copy(preamble[:6], Magic[:])
+	preamble[6] = VersionV1
+	buf.Write(preamble[:])
+
+	hdrPayload := encodeHeaderPayload(Header{CreatedAt: 1000, TargetFile: "data.xlsx"})
+	buf.Write(encodeRecord(OpcodeHeader, hdrPayload))
+
+	// v1 comment op: no TargetFile prefix
+	var copBuf bytes.Buffer
+	var tmp [8]byte
+	binary.LittleEndian.PutUint64(tmp[:], uint64(3000))
+	copBuf.Write(tmp[:])
+	binary.LittleEndian.PutUint32(tmp[:4], 1)
+	copBuf.Write(tmp[:4])
+	copBuf.WriteByte(ActionCommentSet)
+	encodeLPString(&copBuf, "Sheet1")
+	encodeLPString(&copBuf, "A1")
+	encodeLPString(&copBuf, "add comment")
+	binary.LittleEndian.PutUint32(tmp[:4], 1)
+	copBuf.Write(tmp[:4])
+	encodeCommentEntry(&copBuf, CommentEntry{Cell: "A1", Author: "alice", Text: "note"})
+	buf.Write(encodeRecord(OpcodeCommentOp, copBuf.Bytes()))
+
+	rd, _ := NewReader(bytes.NewReader(buf.Bytes()))
+	rd.Next() // header
+	rec, err := rd.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cop := rec.Parsed.(CommentOp)
+	if cop.TargetFile != "data.xlsx" {
+		t.Fatalf("v1 commentop.TargetFile = %q, want data.xlsx (backfilled)", cop.TargetFile)
+	}
+}
+
+func TestV2HeaderRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	w, _ := NewWriter(&buf)
+	w.WriteHeader(9999, "workspace-名前")
+
+	rd, _ := NewReader(bytes.NewReader(buf.Bytes()))
+	rec, err := rd.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hdr := rec.Parsed.(Header)
+	if hdr.CreatedAt != 9999 || hdr.WorkspaceName != "workspace-名前" {
+		t.Fatalf("header = %+v", hdr)
+	}
+	if hdr.TargetFile != "" {
+		t.Fatalf("v2 header should have empty TargetFile, got %q", hdr.TargetFile)
+	}
+}
+
+func TestReaderVersion(t *testing.T) {
+	// v2 file
+	var buf bytes.Buffer
+	NewWriter(&buf)
+	rd, _ := NewReader(bytes.NewReader(buf.Bytes()))
+	if rd.Version() != VersionV2 {
+		t.Fatalf("v2 version = %d", rd.Version())
+	}
+
+	// v1 file
+	data := buildV1Blob(t)
+	rd, _ = NewReader(bytes.NewReader(data))
+	if rd.Version() != VersionV1 {
+		t.Fatalf("v1 version = %d", rd.Version())
 	}
 }

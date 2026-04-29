@@ -18,11 +18,7 @@ func newShowCmd() *cli.Command {
 		Usage: "Show full details of a specific operation",
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			errW := cmdErr(cmd)
-			xlsxPath := cmd.Args().Get(0)
-			if xlsxPath == "" {
-				return outputErrorTo(errW, "missing required argument: <file.xlsx>")
-			}
-			seqStr := cmd.Args().Get(1)
+			seqStr := cmd.Args().Get(0)
 			if seqStr == "" {
 				return outputErrorTo(errW, "missing required argument: <seq>")
 			}
@@ -31,7 +27,11 @@ func newShowCmd() *cli.Command {
 				return outputErrorTo(errW, fmt.Sprintf("invalid sequence number: %s", seqStr))
 			}
 
-			xhp := xhistPath(xlsxPath)
+			xhp, _, err := resolveWorkspaceReadOnly(cmd)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("workspace: %v", err))
+			}
+
 			f, err := os.Open(xhp)
 			if err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("opening %s: %v", xhp, err))
@@ -63,6 +63,7 @@ func newShowCmd() *cli.Command {
 						"sheet":   v.Sheet,
 						"range":   v.Range,
 						"message": v.Message,
+						"file":    v.TargetFile,
 						"values":  flatToGrid(v.Cells, int(v.NumRows), int(v.NumCols)),
 					}
 					if len(v.Comments) > 0 {
@@ -85,6 +86,7 @@ func newShowCmd() *cli.Command {
 						"sheet":   v.Sheet,
 						"range":   v.Range,
 						"message": v.Message,
+						"file":    v.TargetFile,
 					}
 					if len(v.Entries) > 0 {
 						entries := make([]map[string]any, len(v.Entries))

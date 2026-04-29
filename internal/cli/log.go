@@ -13,7 +13,6 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-// logRecord represents either an Op or CommentOp for display purposes.
 type logRecord struct {
 	Op        *format.Op
 	CommentOp *format.CommentOp
@@ -40,6 +39,13 @@ func (lr logRecord) sheet() string {
 	return lr.CommentOp.Sheet
 }
 
+func (lr logRecord) targetFile() string {
+	if lr.Op != nil {
+		return lr.Op.TargetFile
+	}
+	return lr.CommentOp.TargetFile
+}
+
 func newLogCmd() *cli.Command {
 	return &cli.Command{
 		Name:  "log",
@@ -51,17 +57,29 @@ func newLogCmd() *cli.Command {
 			&cli.StringFlag{Name: "since", Usage: "Ops after this time (ISO 8601 or Unix ms)"},
 			&cli.IntFlag{Name: "last", Usage: "Show only the last N ops"},
 			&cli.BoolFlag{Name: "with-values", Usage: "Include cell values in output"},
+			&cli.StringFlag{Name: "file", Usage: "Filter by target file"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			errW := cmdErr(cmd)
-			xlsxPath := cmd.Args().Get(0)
-			if xlsxPath == "" {
-				return outputErrorTo(errW, "missing required argument: <file.xlsx>")
+
+			xhp, wsRoot, err := resolveWorkspaceReadOnly(cmd)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("workspace: %v", err))
 			}
 
-			xhp := xhistPath(xlsxPath)
-			if _, err := os.Stat(xhp); os.IsNotExist(err) {
-				return outputErrorTo(errW, fmt.Sprintf("%s not found", xhp))
+			var fileFilter string
+			xlsxArg := cmd.Args().Get(0)
+			if xlsxArg != "" {
+				fileFilter, err = resolveTargetFile(wsRoot, xlsxArg)
+				if err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("resolving file: %v", err))
+				}
+			}
+			if ff := cmd.String("file"); ff != "" {
+				fileFilter, err = resolveTargetFile(wsRoot, ff)
+				if err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("resolving file: %v", err))
+				}
 			}
 
 			records, err := scanRecords(xhp)
@@ -69,7 +87,7 @@ func newLogCmd() *cli.Command {
 				return outputErrorTo(errW, fmt.Sprintf("reading log: %v", err))
 			}
 
-			records = filterRecords(records, cmd)
+			records = filterRecords(records, cmd, fileFilter)
 
 			outW := cmdOut(cmd)
 			human := cmd.Bool("human") || cmd.Root().Bool("human")
@@ -81,7 +99,7 @@ func newLogCmd() *cli.Command {
 						return err
 					}
 				}
-				return followLog(ctx, xhp, cmd)
+				return followLog(ctx, xhp, cmd, fileFilter)
 			}
 
 			if human {
@@ -177,7 +195,7 @@ func filterOps(ops []format.Op, cmd *cli.Command) []format.Op {
 		if sheetFilter != "" && op.Sheet != sheetFilter {
 			continue
 		}
-		if actionFilter != "" && actionString(op.Action) != actionFilter {
+		if actionFilter != "" && !actionMatches(actionString(op.Action), actionFilter) {
 			continue
 		}
 		if sinceTS > 0 && op.Timestamp <= sinceTS {
@@ -193,7 +211,7 @@ func filterOps(ops []format.Op, cmd *cli.Command) []format.Op {
 	return filtered
 }
 
-func filterRecords(records []logRecord, cmd *cli.Command) []logRecord {
+func filterRecords(records []logRecord, cmd *cli.Command, fileFilter string) []logRecord {
 	var filtered []logRecord
 	sheetFilter := cmd.String("sheet")
 	actionFilter := cmd.String("action")
@@ -208,14 +226,17 @@ func filterRecords(records []logRecord, cmd *cli.Command) []logRecord {
 	}
 
 	for _, lr := range records {
+		if fileFilter != "" && lr.targetFile() != fileFilter {
+			continue
+		}
 		if sheetFilter != "" && lr.sheet() != sheetFilter {
 			continue
 		}
 		if actionFilter != "" {
-			if lr.Op != nil && actionString(lr.Op.Action) != actionFilter {
+			if lr.Op != nil && !actionMatches(actionString(lr.Op.Action), actionFilter) {
 				continue
 			}
-			if lr.CommentOp != nil && commentActionString(lr.CommentOp.Action) != actionFilter {
+			if lr.CommentOp != nil && !actionMatches(commentActionString(lr.CommentOp.Action), actionFilter) {
 				continue
 			}
 		}
@@ -252,6 +273,13 @@ func commentActionString(a uint8) string {
 	}
 }
 
+func actionMatches(actual, filter string) bool {
+	if actual == filter {
+		return true
+	}
+	return filter == "comment" && strings.HasPrefix(actual, "comment_")
+}
+
 func opToMap(op format.Op, withValues bool) map[string]any {
 	m := map[string]any{
 		"seq":     op.Sequence,
@@ -260,6 +288,7 @@ func opToMap(op format.Op, withValues bool) map[string]any {
 		"sheet":   op.Sheet,
 		"range":   op.Range,
 		"message": op.Message,
+		"file":    op.TargetFile,
 	}
 	if withValues {
 		m["values"] = flatToGrid(op.Cells, int(op.NumRows), int(op.NumCols))
@@ -280,6 +309,7 @@ func recordToMap(lr logRecord, withValues bool) map[string]any {
 		"sheet":   cop.Sheet,
 		"range":   cop.Range,
 		"message": cop.Message,
+		"file":    cop.TargetFile,
 	}
 	if cop.NumEntries > 0 {
 		entries := make([]map[string]any, len(cop.Entries))
@@ -310,10 +340,10 @@ func flatToGrid(cells []format.Cell, rows, cols int) [][]any {
 }
 
 func printHumanLog(w io.Writer, records []logRecord) {
-	fmt.Fprintf(w, " %-5s %-22s %-14s %-10s %-12s %s\n", "SEQ", "TIME", "ACTION", "SHEET", "RANGE", "MESSAGE")
+	fmt.Fprintf(w, " %-5s %-22s %-14s %-10s %-12s %-20s %s\n", "SEQ", "TIME", "ACTION", "SHEET", "RANGE", "FILE", "MESSAGE")
 	for _, lr := range records {
 		var seq uint32
-		var ts, action, sheet, rng, msg string
+		var ts, action, sheet, rng, msg, file string
 		if lr.Op != nil {
 			seq = lr.Op.Sequence
 			ts = time.UnixMilli(lr.Op.Timestamp).UTC().Format(time.RFC3339)
@@ -321,6 +351,7 @@ func printHumanLog(w io.Writer, records []logRecord) {
 			sheet = lr.Op.Sheet
 			rng = lr.Op.Range
 			msg = lr.Op.Message
+			file = lr.Op.TargetFile
 		} else {
 			seq = lr.CommentOp.Sequence
 			ts = time.UnixMilli(lr.CommentOp.Timestamp).UTC().Format(time.RFC3339)
@@ -328,12 +359,13 @@ func printHumanLog(w io.Writer, records []logRecord) {
 			sheet = lr.CommentOp.Sheet
 			rng = lr.CommentOp.Range
 			msg = lr.CommentOp.Message
+			file = lr.CommentOp.TargetFile
 		}
-		fmt.Fprintf(w, " %-5d %-22s %-14s %-10s %-12s %s\n", seq, ts, action, sheet, rng, msg)
+		fmt.Fprintf(w, " %-5d %-22s %-14s %-10s %-12s %-20s %s\n", seq, ts, action, sheet, rng, file, msg)
 	}
 }
 
-func followLog(ctx context.Context, xhp string, cmd *cli.Command) error {
+func followLog(ctx context.Context, xhp string, cmd *cli.Command, fileFilter string) error {
 	outW := cmdOut(cmd)
 	var lastSeq uint32
 	records, _ := scanRecords(xhp)
@@ -357,16 +389,19 @@ func followLog(ctx context.Context, xhp string, cmd *cli.Command) error {
 				if lr.sequence() <= lastSeq {
 					continue
 				}
+				if fileFilter != "" && lr.targetFile() != fileFilter {
+					continue
+				}
 				sheetFilter := cmd.String("sheet")
 				actionFilter := cmd.String("action")
 				if sheetFilter != "" && lr.sheet() != sheetFilter {
 					continue
 				}
 				if actionFilter != "" {
-					if lr.Op != nil && actionString(lr.Op.Action) != actionFilter {
+					if lr.Op != nil && !actionMatches(actionString(lr.Op.Action), actionFilter) {
 						continue
 					}
-					if lr.CommentOp != nil && commentActionString(lr.CommentOp.Action) != actionFilter {
+					if lr.CommentOp != nil && !actionMatches(commentActionString(lr.CommentOp.Action), actionFilter) {
 						continue
 					}
 				}

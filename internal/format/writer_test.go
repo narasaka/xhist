@@ -22,15 +22,15 @@ func TestWriterPreamble(t *testing.T) {
 			t.Fatalf("magic[%d] = 0x%02x, want 0x%02x", i, b[i], Magic[i])
 		}
 	}
-	if b[6] != Version {
-		t.Fatalf("version = 0x%02x, want 0x%02x", b[6], Version)
+	if b[6] != VersionLatest {
+		t.Fatalf("version = 0x%02x, want 0x%02x", b[6], VersionLatest)
 	}
 }
 
 func TestWriteHeaderByteLayout(t *testing.T) {
 	var buf bytes.Buffer
 	w, _ := NewWriter(&buf)
-	if err := w.WriteHeader(1000, "test.xlsx"); err != nil {
+	if err := w.WriteHeader(1000, "my-workspace"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -40,9 +40,9 @@ func TestWriteHeaderByteLayout(t *testing.T) {
 	}
 
 	payloadLen := binary.LittleEndian.Uint32(data[1:5])
-	// 8 (createdAt) + 4 (string len) + 9 (string bytes) = 21
-	if payloadLen != 21 {
-		t.Fatalf("payload length = %d, want 21", payloadLen)
+	// 8 (createdAt) + 4 (string len) + 12 (string bytes) = 24
+	if payloadLen != 24 {
+		t.Fatalf("payload length = %d, want 24", payloadLen)
 	}
 
 	payload := data[5 : 5+payloadLen]
@@ -53,11 +53,11 @@ func TestWriteHeaderByteLayout(t *testing.T) {
 	}
 
 	strLen := binary.LittleEndian.Uint32(payload[8:12])
-	if strLen != 9 {
-		t.Fatalf("targetFile len = %d, want 9", strLen)
+	if strLen != 12 {
+		t.Fatalf("workspaceName len = %d, want 12", strLen)
 	}
-	if string(payload[12:21]) != "test.xlsx" {
-		t.Fatalf("targetFile = %q", string(payload[12:21]))
+	if string(payload[12:24]) != "my-workspace" {
+		t.Fatalf("workspaceName = %q", string(payload[12:24]))
 	}
 
 	storedCRC := binary.LittleEndian.Uint32(data[5+payloadLen : 5+payloadLen+4])
@@ -185,6 +185,7 @@ func TestWriteCommentOpByteLayout(t *testing.T) {
 	var buf bytes.Buffer
 	w, _ := NewWriter(&buf)
 	cop := CommentOp{
+		TargetFile: "test.xlsx",
 		Timestamp:  5000,
 		Sequence:   3,
 		Action:     ActionCommentSet,
@@ -213,16 +214,17 @@ func TestWriteCommentOpByteLayout(t *testing.T) {
 	}
 
 	payload := data[5 : 5+payloadLen]
-	ts := int64(binary.LittleEndian.Uint64(payload[0:8]))
+	// TargetFile lpstring: 4 (len) + 9 ("test.xlsx") = 13 bytes offset
+	ts := int64(binary.LittleEndian.Uint64(payload[13:21]))
 	if ts != 5000 {
 		t.Fatalf("timestamp = %d, want 5000", ts)
 	}
-	seq := binary.LittleEndian.Uint32(payload[8:12])
+	seq := binary.LittleEndian.Uint32(payload[21:25])
 	if seq != 3 {
 		t.Fatalf("sequence = %d, want 3", seq)
 	}
-	if payload[12] != ActionCommentSet {
-		t.Fatalf("action = %d, want ActionCommentSet", payload[12])
+	if payload[25] != ActionCommentSet {
+		t.Fatalf("action = %d, want ActionCommentSet", payload[25])
 	}
 }
 

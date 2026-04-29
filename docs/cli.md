@@ -1,13 +1,13 @@
 # xhist CLI Specification
 
-**Version:** 1
-**Status:** Draft
+**Version:** 2
+**Status:** Current
 
 ## Overview
 
-The xhist CLI is the **exclusive interface** for AI agents to interact with Excel files. The agent never opens the `.xlsx` directly — every read and write flows through xhist, which proxies the Excel operation and appends a record to the binary log.
+The xhist CLI is the **exclusive interface** for AI agents to interact with Excel files. The agent never opens the `.xlsx` directly. Every read and write flows through xhist, which proxies the Excel operation and appends a record to a workspace-level binary log.
 
-Humans use the same CLI for inspection and debugging.
+One `.xhist` file tracks all Excel files within a workspace. Humans use the same CLI for inspection and debugging.
 
 ## Conventions
 
@@ -17,8 +17,9 @@ Humans use the same CLI for inspection and debugging.
 | Errors | Stderr, exit code 1. JSON object: `{"error": "message"}` |
 | Success | Stdout, exit code 0 |
 | Streaming | `--follow` where supported. NDJSON (one JSON object per line). |
-| Auto-init | If no `.xhist` file exists for the target, create one automatically on first operation. |
-| File discovery | `budget.xlsx` → looks for `budget.xhist` in the same directory. |
+| Workspace discovery | Commands automatically find the nearest `{name}.xhist` file by walking up from the current directory. |
+| Global flags | `--workspace <path>` explicitly sets the `.xhist` file to use. |
+| v1 Compatibility | Read-only commands work with v1 files via `--workspace`. Write commands refuse v1 files. |
 
 ## Cell Addressing
 
@@ -59,10 +60,10 @@ Ranges are represented as **row-major arrays of arrays**:
 
 ### `xhist init`
 
-Create a new `.xhist` file for an Excel file. Optional — other commands auto-init.
+Create a new workspace `.xhist` file.
 
 ```
-xhist init <file.xlsx> [flags]
+xhist init [name] [flags]
 ```
 
 | Flag | Description |
@@ -72,14 +73,14 @@ xhist init <file.xlsx> [flags]
 | `--session <id>` | Write `session.id` metadata record |
 | `--force` | Overwrite existing `.xhist` file |
 
-- If `<file.xlsx>` does not exist, creates an empty workbook.
-- If `.xhist` already exists and `--force` is not set, exits with error.
+- `[name]` defaults to the current directory name.
+- Creates `{name}.xhist` in the current directory.
 
 ---
 
 ### `xhist read`
 
-Read cells from Excel. Logs a READ op to the history.
+Read cells from Excel. Logs a READ op to the workspace history.
 
 ```
 xhist read <file.xlsx> <range> [flags]
@@ -97,18 +98,11 @@ $ xhist read budget.xlsx Sheet1!A1:C3
 [["Revenue","Cost","Profit"],[1000,500,500],[2000,800,1200]]
 ```
 
-Single cell returns a scalar:
-
-```
-$ xhist read budget.xlsx Sheet1!A1
-"Revenue"
-```
-
 ---
 
 ### `xhist write`
 
-Write cells to Excel. Logs a WRITE op to the history.
+Write cells to Excel. Logs a WRITE op to the workspace history.
 
 ```
 xhist write <file.xlsx> <range> [value] [flags]
@@ -127,21 +121,7 @@ xhist write <file.xlsx> <range> [value] [flags]
 $ xhist write budget.xlsx Sheet1!A1 "Revenue" -m "Adding header"
 ```
 
-**Range** — values as JSON:
-
-```
-$ xhist write budget.xlsx Sheet1!A1:B2 --json '[["Name","Value"],["Revenue",1000]]' -m "Adding data"
-```
-
-**From stdin:**
-
-```
-$ echo '[["Name","Value"],["Revenue",1000]]' | xhist write budget.xlsx Sheet1!A1:B2 --stdin -m "Piped data"
-```
-
-Type coercion: JSON strings starting with `=` are written as formulas. `null` clears the cell.
-
-**Exit output** on success (for agent confirmation):
+**Exit output** on success:
 
 ```json
 {"seq": 1, "cells_written": 2}
@@ -151,56 +131,31 @@ Type coercion: JSON strings starting with `=` are written as formulas. `null` cl
 
 ### `xhist log`
 
-Show operation history.
+Show operation history for the workspace or a specific file.
 
 ```
-xhist log <file.xlsx> [flags]
+xhist log [file.xlsx] [flags]
 ```
 
 | Flag | Description |
 |------|-------------|
+| `--file <path>` | Filter by target file (alternative to positional arg) |
 | `--follow` | Stream new ops in real-time (NDJSON) |
 | `--sheet <name>` | Filter by sheet name |
-| `--action <read\|write>` | Filter by action type |
+| `--action <read\|write\|comment\|comment_set\|comment_get\|comment_delete>` | Filter by action type. `comment` is shorthand for all three `comment_*` variants. |
 | `--since <timestamp>` | Ops after this time (ISO 8601 or Unix ms) |
 | `--last <n>` | Show only the last N ops |
 | `--with-values` | Include cell values in output |
 | `--human` | Human-readable table format |
 
-**Default output** (JSON array, values omitted for brevity):
-
-```json
-[
-  {"seq": 1, "ts": "2024-01-15T10:30:00Z", "action": "write", "sheet": "Sheet1", "range": "A1:C1", "message": "Adding headers"},
-  {"seq": 2, "ts": "2024-01-15T10:30:01Z", "action": "read", "sheet": "Sheet1", "range": "A1:C5", "message": "Reviewing data"}
-]
-```
-
-**Follow mode** (NDJSON, one line per op, blocks until new ops arrive):
-
-```
-$ xhist log budget.xlsx --follow
-{"seq": 3, "ts": "...", "action": "write", "sheet": "Sheet1", "range": "A2:C2", "message": "Adding Q1 data"}
-{"seq": 4, "ts": "...", "action": "write", "sheet": "Sheet1", "range": "A3:C3", "message": "Adding Q2 data"}
-```
-
-**Human mode:**
-
-```
-$ xhist log budget.xlsx --human
- SEQ  TIME                  ACTION  SHEET   RANGE   MESSAGE
- 1    2024-01-15T10:30:00Z  WRITE   Sheet1  A1:C1   Adding headers
- 2    2024-01-15T10:30:01Z  READ    Sheet1  A1:C5   Reviewing data
-```
-
 ---
 
 ### `xhist show`
 
-Show full details of a specific operation, including cell values.
+Show full details of a specific operation by sequence number.
 
 ```
-xhist show <file.xlsx> <seq>
+xhist show <seq>
 ```
 
 **Output:**
@@ -208,6 +163,7 @@ xhist show <file.xlsx> <seq>
 ```json
 {
   "seq": 1,
+  "target": "budget.xlsx",
   "ts": "2024-01-15T10:30:00Z",
   "action": "write",
   "sheet": "Sheet1",
@@ -219,30 +175,77 @@ xhist show <file.xlsx> <seq>
 
 ---
 
-### `xhist sheets`
+### `xhist comment`
 
-List sheets in the Excel file and their used dimensions.
+Manage native Excel cell comments. Three subcommands: `set`, `get`, `delete`. Comments are written into the `.xlsx` file as real Excel notes AND recorded in the workspace log as `comment_set` / `comment_delete` ops.
 
 ```
-xhist sheets <file.xlsx>
+xhist comment set <file.xlsx> <range> [text] [flags]
+xhist comment get <file.xlsx> <range>
+xhist comment delete <file.xlsx> <range> [flags]
 ```
+
+| Subcommand | Required flags | Optional flags |
+|------------|----------------|----------------|
+| `set` | `--message`/`-m <why>` | `--json <grid>`, `--author <name>` |
+| `get` | (none) | (none) |
+| `delete` | `--message`/`-m <why>` | (none) |
+
+**Set a single cell's comment** — provide the text as a positional arg:
+
+```bash
+xhist comment set budget.xlsx 'Sheet1!A1' "Source: 2024 10-K p.47" -m "Citation" --author agent-1
+```
+
+**Set a range of comments** — use `--json` with a 2D grid of strings (empty string = skip that cell):
+
+```bash
+xhist comment set budget.xlsx 'Sheet1!A1:B2' \
+  --json '[["Source: SAP",""],["Source: Oracle","Source: Bloomberg"]]' \
+  -m "Adding citations" --author agent-1
+```
+
+**Get comments** — returns `null` / `{}` if none, a single object for single-cell queries, or a sparse array for ranges.
+
+**Delete comments** — removes both the in-workbook note and records a `comment_delete` op.
+
+---
+
+### `xhist info`
+
+Show metadata and stats about the workspace history.
+
+```
+xhist info [file.xlsx]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--file <path>` | Filter stats to a specific file |
 
 **Output:**
 
 ```json
-[
-  {"name": "Sheet1", "rows": 100, "cols": 10},
-  {"name": "Sheet2", "rows": 50, "cols": 5}
-]
+{
+  "workspace": "project-alpha",
+  "created": "2024-01-15T10:30:00Z",
+  "ops": 150,
+  "files": [
+    {"path": "budget.xlsx", "ops": 42},
+    {"path": "forecast.xlsx", "ops": 108}
+  ],
+  "last_op": "2024-01-15T11:45:00Z",
+  "metadata": {
+    "agent.name": "excel-agent"
+  }
+}
 ```
-
-Does not log an operation (this is file metadata, not a cell read).
 
 ---
 
 ### `xhist state`
 
-Reconstruct the known spreadsheet state by replaying all WRITE ops from the history.
+Reconstruct the known spreadsheet state by replaying WRITE ops.
 
 ```
 xhist state <file.xlsx> [flags]
@@ -255,111 +258,58 @@ xhist state <file.xlsx> [flags]
 | `--range <range>` | Show a specific range only |
 | `--diff` | Compare reconstructed state vs actual Excel file |
 
-**Output:** JSON object keyed by sheet name, values as row-major arrays.
-
-```json
-{
-  "Sheet1": {
-    "range": "A1:C3",
-    "values": [
-      ["Revenue", "Cost", "Profit"],
-      [1000, 500, 500],
-      [2000, 800, 1200]
-    ]
-  }
-}
-```
-
-The `--diff` flag is especially useful for detecting out-of-band edits (someone edited the xlsx without going through xhist).
-
 ---
 
-### `xhist info`
+### `xhist migrate`
 
-Show metadata and stats about the history file.
+Migrate legacy v1 `.xhist` files into a new workspace log.
 
 ```
-xhist info <file.xlsx>
+xhist migrate [--name NAME] [--dir DIR] [--dry-run]
 ```
 
-**Output:**
-
-```json
-{
-  "target": "budget.xlsx",
-  "created": "2024-01-15T10:30:00Z",
-  "ops": 42,
-  "reads": 15,
-  "writes": 27,
-  "last_op": "2024-01-15T11:45:00Z",
-  "sheets_touched": ["Sheet1", "Sheet2"],
-  "has_footer": true,
-  "index_stale": false,
-  "metadata": {
-    "agent.name": "excel-agent",
-    "session.id": "abc-123"
-  }
-}
-```
+- Scans `DIR` (default `.`) for `.xhist` files.
+- Creates a new workspace log `NAME.xhist`.
+- Imports all records, preserving timestamps and sequence order.
 
 ---
 
 ### `xhist verify`
 
-Check integrity of the `.xhist` file. Validates every record CRC.
+Check integrity of the workspace `.xhist` file.
 
 ```
-xhist verify <file.xlsx>
+xhist verify
 ```
-
-**Success:**
-
-```json
-{"ok": true, "records": 44, "ops": 42}
-```
-
-**Corruption detected:**
-
-```json
-{"ok": false, "records_valid": 30, "corruption_offset": 4892, "error": "CRC mismatch at record 31"}
-```
-
-Exit code 1 on corruption.
 
 ---
 
 ### `xhist reindex`
 
-Rebuild the sidecar index from the log file.
+Rebuild the sidecar index for the workspace.
 
 ```
-xhist reindex <file.xlsx>
-```
-
-**Output:**
-
-```json
-{"entries": 42, "index_file": "budget.xhist.idx"}
+xhist reindex
 ```
 
 ---
 
 ### `xhist repair`
 
-Truncate a corrupted `.xhist` file at the last valid record.
+Truncate a corrupted workspace `.xhist` file.
 
 ```
-xhist repair <file.xlsx> [flags]
+xhist repair [flags]
 ```
 
-| Flag | Description |
-|------|-------------|
-| `--dry-run` | Report what would be truncated without modifying the file |
+---
 
-**Output:**
+### `xhist sheets`
 
-```json
-{"truncated_at": 4892, "records_kept": 30, "records_lost": 14, "bytes_removed": 2048}
+List sheets in an Excel file. Reads the `.xlsx` directly.
+
+```
+xhist sheets <file.xlsx>
 ```
 
 ---
@@ -369,31 +319,19 @@ xhist repair <file.xlsx> [flags]
 ### Recommended Agent Workflow
 
 ```
-1. xhist sheets budget.xlsx              → discover structure
-2. xhist read budget.xlsx Sheet1!A1:Z1   → read headers
-3. xhist read budget.xlsx Sheet1!A1:D20  → read data
-4. xhist write budget.xlsx Sheet1!E1 "Growth" -m "Adding growth rate column"
-5. xhist write budget.xlsx Sheet1!E2:E20 --json '[...]' -m "Calculating growth rates"
-6. xhist log budget.xlsx --last 5        → review recent operations
+1. xhist init project-name                → setup workspace
+2. xhist sheets budget.xlsx               → discover structure
+3. xhist read budget.xlsx Sheet1!A1:Z1    → read headers
+4. xhist write budget.xlsx Sheet1!E1 "Growth" -m "Adding column"
+5. xhist log budget.xlsx --last 5         → review recent operations
 ```
 
 ### Resuming After Context Loss
 
-When an agent starts a new session on a file that already has history:
-
 ```
-1. xhist info budget.xlsx                → understand scope
-2. xhist log budget.xlsx --last 20       → recall recent operations
-3. xhist log budget.xlsx --last 5 --with-values  → see actual values for recent ops
+1. xhist info                             → see workspace overview
+2. xhist log --last 20                    → recall global timeline
+3. xhist log budget.xlsx --last 5         → focus on specific file
 4. ... continue work ...
 ```
 
-This is the core value proposition: the agent recovers its working context from the history file instead of relying on its context window.
-
-### Real-Time Monitoring (Human)
-
-```
-$ xhist log budget.xlsx --follow --human
-```
-
-Watch the agent work in real time. Each operation appears as it's logged.

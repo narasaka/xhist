@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/prosights/xhist/internal/format"
+	"github.com/xuri/excelize/v2"
 )
 
 func TestCreateWorkbook(t *testing.T) {
@@ -488,5 +489,106 @@ func TestCommentDefaultSheet(t *testing.T) {
 	}
 	if c == nil || c.Text != "default sheet" {
 		t.Fatalf("expected comment on default sheet, got %+v", c)
+	}
+}
+
+func TestReadReturnsRawNumberIgnoringFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.xlsx")
+	if err := CreateWorkbook(path); err != nil {
+		t.Fatal(err)
+	}
+
+	cells := [][]format.Cell{
+		{
+			{Type: format.CellNumber, Number: 231521},
+			{Type: format.CellNumber, Number: -456},
+			{Type: format.CellNumber, Number: 0.1234},
+		},
+	}
+	if err := WriteCells(path, "Sheet1", "A1", cells); err != nil {
+		t.Fatalf("WriteCells: %v", err)
+	}
+
+	f, err := excelize.OpenFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountingFmt := "#,##0;(#,##0)"
+	percentFmt := "0.00%"
+	thousandsFmt := `#,##0`
+	thousandsStyle, err := f.NewStyle(&excelize.Style{CustomNumFmt: &thousandsFmt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountingStyle, err := f.NewStyle(&excelize.Style{CustomNumFmt: &accountingFmt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	percentStyle, err := f.NewStyle(&excelize.Style{CustomNumFmt: &percentFmt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetCellStyle("Sheet1", "A1", "A1", thousandsStyle); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetCellStyle("Sheet1", "B1", "B1", accountingStyle); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetCellStyle("Sheet1", "C1", "C1", percentStyle); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SaveAs(path); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+
+	got, err := ReadCells(path, "Sheet1", "A1", "C1")
+	if err != nil {
+		t.Fatalf("ReadCells: %v", err)
+	}
+	if len(got) != 1 || len(got[0]) != 3 {
+		t.Fatalf("expected 1x3 grid, got %dx%d", len(got), len(got[0]))
+	}
+
+	for i, want := range []struct {
+		number  float64
+		context string
+	}{
+		{231521, "thousands-formatted number must round-trip as raw 231521 (not \"231,521\")"},
+		{-456, "accounting-formatted negative must round-trip as raw -456 (not \"(456)\")"},
+		{0.1234, "percent-formatted number must round-trip as raw 0.1234 (not \"12.34%\")"},
+	} {
+		cell := got[0][i]
+		if cell.Type != format.CellNumber {
+			t.Fatalf("cell [0][%d] (%s): expected CellNumber, got type %d with String=%q", i, want.context, cell.Type, cell.String)
+		}
+		if cell.Number != want.number {
+			t.Fatalf("cell [0][%d] (%s): expected Number=%v, got %v", i, want.context, want.number, cell.Number)
+		}
+	}
+}
+
+func TestReadReturnsRawBool(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.xlsx")
+	if err := CreateWorkbook(path); err != nil {
+		t.Fatal(err)
+	}
+
+	cells := [][]format.Cell{
+		{{Type: format.CellBool, Bool: true}, {Type: format.CellBool, Bool: false}},
+	}
+	if err := WriteCells(path, "Sheet1", "A1", cells); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ReadCells(path, "Sheet1", "A1", "B1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0][0].Type != format.CellBool || !got[0][0].Bool {
+		t.Fatalf("A1: expected CellBool true, got type=%d bool=%v", got[0][0].Type, got[0][0].Bool)
+	}
+	if got[0][1].Type != format.CellBool || got[0][1].Bool {
+		t.Fatalf("B1: expected CellBool false, got type=%d bool=%v", got[0][1].Type, got[0][1].Bool)
 	}
 }

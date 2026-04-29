@@ -9,8 +9,10 @@ import (
 
 // Reader reads xhist records sequentially from an io.ReadSeeker.
 type Reader struct {
-	r      io.ReadSeeker
-	offset int64
+	r          io.ReadSeeker
+	offset     int64
+	version    uint8
+	targetFile string // v1: backfill from header into Op/CommentOp
 }
 
 // NewReader validates the preamble and returns a Reader.
@@ -26,10 +28,15 @@ func NewReader(r io.ReadSeeker) (*Reader, error) {
 		preamble[3] != Magic[3] || preamble[4] != Magic[4] || preamble[5] != Magic[5] {
 		return nil, &ErrBadMagic{}
 	}
-	if preamble[6] != Version {
-		return nil, &ErrBadVersion{Got: preamble[6]}
+	v := preamble[6]
+	if v != VersionV1 && v != VersionV2 {
+		return nil, &ErrBadVersion{Got: v}
 	}
-	return &Reader{r: r, offset: PreambleSize}, nil
+	return &Reader{r: r, offset: PreambleSize, version: v}, nil
+}
+
+func (rd *Reader) Version() uint8 {
+	return rd.version
 }
 
 // ParsedRecord holds a raw Record plus its parsed typed struct.
@@ -59,7 +66,6 @@ func (rd *Reader) Next() (*ParsedRecord, error) {
 	n, err = io.ReadFull(rd.r, payloadAndCRC)
 	if err != nil {
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			// incomplete trailing record
 			return nil, io.EOF
 		}
 		return nil, err
@@ -69,7 +75,6 @@ func (rd *Reader) Next() (*ParsedRecord, error) {
 	payload := payloadAndCRC[:length]
 	storedCRC := binary.LittleEndian.Uint32(payloadAndCRC[length:])
 
-	// CRC covers opcode + length bytes + payload
 	h := crc32.NewIEEE()
 	h.Write(hdr[:])
 	h.Write(payload)
@@ -86,23 +91,50 @@ func (rd *Reader) Next() (*ParsedRecord, error) {
 
 	switch opcode {
 	case OpcodeHeader:
-		parsed, err := decodeHeaderPayload(payload)
-		if err != nil {
-			return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid header payload: " + err.Error()}
+		if rd.version == VersionV2 {
+			parsed, err := decodeHeaderPayloadV2(payload)
+			if err != nil {
+				return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid header payload: " + err.Error()}
+			}
+			rec.Parsed = parsed
+		} else {
+			parsed, err := decodeHeaderPayload(payload)
+			if err != nil {
+				return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid header payload: " + err.Error()}
+			}
+			rd.targetFile = parsed.TargetFile
+			rec.Parsed = parsed
 		}
-		rec.Parsed = parsed
 	case OpcodeOp:
-		parsed, err := decodeOpPayload(payload)
-		if err != nil {
-			return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid op payload: " + err.Error()}
+		if rd.version == VersionV2 {
+			parsed, err := decodeOpPayloadV2(payload)
+			if err != nil {
+				return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid op payload: " + err.Error()}
+			}
+			rec.Parsed = parsed
+		} else {
+			parsed, err := decodeOpPayloadV1(payload)
+			if err != nil {
+				return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid op payload: " + err.Error()}
+			}
+			parsed.TargetFile = rd.targetFile
+			rec.Parsed = parsed
 		}
-		rec.Parsed = parsed
 	case OpcodeCommentOp:
-		parsed, err := decodeCommentOpPayload(payload)
-		if err != nil {
-			return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid comment op payload: " + err.Error()}
+		if rd.version == VersionV2 {
+			parsed, err := decodeCommentOpPayloadV2(payload)
+			if err != nil {
+				return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid comment op payload: " + err.Error()}
+			}
+			rec.Parsed = parsed
+		} else {
+			parsed, err := decodeCommentOpPayloadV1(payload)
+			if err != nil {
+				return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid comment op payload: " + err.Error()}
+			}
+			parsed.TargetFile = rd.targetFile
+			rec.Parsed = parsed
 		}
-		rec.Parsed = parsed
 	case OpcodeMetadata:
 		parsed, err := decodeMetadataPayload(payload)
 		if err != nil {
@@ -116,7 +148,7 @@ func (rd *Reader) Next() (*ParsedRecord, error) {
 		}
 		rec.Parsed = parsed
 	default:
-		// unknown opcode — already read and skipped, Parsed stays nil
+		// unknown opcode — Parsed stays nil
 	}
 
 	return rec, nil

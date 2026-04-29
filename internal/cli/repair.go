@@ -19,12 +19,12 @@ func newRepairCmd() *cli.Command {
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			errW := cmdErr(cmd)
-			xlsxPath := cmd.Args().Get(0)
-			if xlsxPath == "" {
-				return outputErrorTo(errW, "missing required argument: <file.xlsx>")
+
+			xhp, _, err := resolveWorkspaceReadOnly(cmd)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("workspace: %v", err))
 			}
 
-			xhp := xhistPath(xlsxPath)
 			f, err := os.Open(xhp)
 			if err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("opening %s: %v", xhp, err))
@@ -54,8 +54,6 @@ func newRepairCmd() *cli.Command {
 					break
 				}
 				records++
-				// After a successful read, the reader's internal offset is past this record.
-				// We track via counting and will compute later.
 			}
 			f.Close()
 

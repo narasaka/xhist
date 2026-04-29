@@ -1,22 +1,46 @@
 # xhist
 
-Append-only operation log for Excel files. Every read and write an AI agent performs on a spreadsheet is recorded to a binary history file, so the agent can replay its context without relying on its context window.
+Append-only operation log for Excel files. Every read and write an AI agent performs on a spreadsheet is recorded to a workspace-level binary history file. This allows agents to replay their context and maintain a unified timeline across multiple files.
 
-One `.xhist` file tracks exactly one `.xlsx` file. The agent never touches the spreadsheet directly -- all operations go through `xhist`.
+One `.xhist` file tracks all `.xlsx` files in a workspace. The agent never touches the spreadsheet directly. All operations flow through `xhist`.
 
 ## Install
 
-```
+```bash
 go install github.com/prosights/xhist/cmd/xhist@latest
 ```
 
-## Usage
+## Quick Start
 
-```
-xhist init budget.xlsx
+```bash
+# 1. Initialize a workspace
+xhist init my-project
+
+# 2. Perform operations (workspace log is auto-discovered)
 xhist write budget.xlsx Sheet1!A1 "Revenue" -m "Adding header"
 xhist read budget.xlsx Sheet1!A1
-xhist log budget.xlsx
+
+# 3. View the unified timeline
+xhist log
+```
+
+## Workspace Workflow
+
+xhist is designed for portability. The `{workspace}.xhist` file is the distributable artifact that contains the full audit trail and context for all Excel files in the directory.
+
+1. **Initialize**: Run `xhist init` to start tracking a directory.
+2. **Work**: Agents use `xhist read` and `xhist write`.
+3. **Distribute**: Copy the `.xlsx` files along with the `.xhist` file to another machine. The history remains intact and searchable.
+4. **Recall**: New agent sessions use `xhist log` to understand what has already been done across all files.
+
+## Usage
+
+```bash
+xhist init [name]
+xhist write <file.xlsx> <range> [value] -m "message"
+xhist read <file.xlsx> <range>
+xhist log [file.xlsx]
+xhist info
 ```
 
 Run `xhist --help` for the full command list.
@@ -25,7 +49,7 @@ Run `xhist --help` for the full command list.
 
 Requires Go 1.24+.
 
-```
+```bash
 git clone https://github.com/prosights/xhist.git
 cd xhist
 make build
@@ -46,6 +70,7 @@ make clean      Remove build artifacts
 
 Install the xhist skill so your AI agent knows how to use the CLI:
 
-```
+```bash
 npx skills add https://github.com/prosights/xhist --skill xhist
 ```
+

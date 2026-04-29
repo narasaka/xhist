@@ -5,8 +5,15 @@ import "fmt"
 // Magic bytes: ASCII "XHIST" + NUL.
 var Magic = [6]byte{0x58, 0x48, 0x49, 0x53, 0x54, 0x00}
 
-// Version is the current format version.
-const Version = 0x01
+// Format versions.
+const (
+	VersionV1     = 0x01
+	VersionV2     = 0x02
+	VersionLatest = VersionV2
+)
+
+// Version is kept for backward compatibility with external callers.
+const Version = VersionV1
 
 // PreambleSize is the size of the file preamble in bytes (6 magic + 1 version).
 const PreambleSize = 7
@@ -46,8 +53,12 @@ const (
 // Index file constants.
 var IndexMagic = [6]byte{0x58, 0x48, 0x49, 0x44, 0x58, 0x00}
 
-// IndexVersion is the current index format version.
-const IndexVersion = 0x02
+// IndexVersion constants.
+const (
+	IndexVersionV2 = 0x02
+	IndexVersionV3 = 0x03
+	IndexVersion   = IndexVersionV3
+)
 
 // IndexPreambleSize is the size of the index preamble (6 magic + 1 version + 8 logsize + 4 entrycount).
 const IndexPreambleSize = 19

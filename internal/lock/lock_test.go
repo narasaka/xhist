@@ -38,6 +38,29 @@ func TestAcquireAndRelease(t *testing.T) {
 	}
 }
 
+func TestAcquireSinglePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	xhistPath := filepath.Join(tmpDir, "data.xhist")
+
+	if err := os.WriteFile(xhistPath, []byte("test"), 0644); err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+
+	ctx := context.Background()
+	unlocker, err := Acquire(ctx, xhistPath)
+	if err != nil {
+		t.Fatalf("Acquire single path failed: %v", err)
+	}
+
+	if _, err := os.Stat(xhistPath + ".lock"); err != nil {
+		t.Errorf("lock file not created: %v", err)
+	}
+
+	if err := unlocker.Release(); err != nil {
+		t.Errorf("Release failed: %v", err)
+	}
+}
+
 func TestAcquireBlocksWhileHeld(t *testing.T) {
 	tmpDir := t.TempDir()
 	xhistPath := filepath.Join(tmpDir, "data.xhist")
@@ -171,4 +194,28 @@ func TestConcurrentAcquire(t *testing.T) {
 		}
 		unlocker2.Release()
 	}
+}
+
+func TestAcquireNoPaths(t *testing.T) {
+	ctx := context.Background()
+	_, err := Acquire(ctx)
+	if err == nil {
+		t.Fatal("expected error when no paths provided")
+	}
+}
+
+func TestAcquireDeduplicates(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, "data.xhist")
+
+	if err := os.WriteFile(p, []byte("test"), 0644); err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+
+	ctx := context.Background()
+	unlocker, err := Acquire(ctx, p, p)
+	if err != nil {
+		t.Fatalf("Acquire with duplicate paths failed: %v", err)
+	}
+	defer unlocker.Release()
 }

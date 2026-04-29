@@ -3,6 +3,7 @@ package lock
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -26,19 +27,33 @@ func (u *Unlocker) Release() error {
 	return firstErr
 }
 
-// Acquire acquires exclusive locks on the xhist and xlsx files.
-// Uses sidecar .lock files (e.g. data.xhist.lock, data.xlsx.lock).
+// Acquire acquires exclusive locks on the given file paths.
+// Uses sidecar .lock files (e.g. data.xhist.lock).
 // Locks are acquired in alphabetical order to prevent deadlocks.
 // Times out after 10 seconds with 100ms retry interval.
-func Acquire(ctx context.Context, xhistPath, xlsxPath string) (*Unlocker, error) {
-	// Sort paths alphabetically for consistent ordering
-	paths := sortPaths(xhistPath+".lock", xlsxPath+".lock")
+// Accepts 1 or more paths.
+func Acquire(ctx context.Context, paths ...string) (*Unlocker, error) {
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("lock: no paths provided")
+	}
+
+	// Deduplicate and sort lock paths
+	lockPaths := make([]string, 0, len(paths))
+	seen := map[string]bool{}
+	for _, p := range paths {
+		lp := p + ".lock"
+		if !seen[lp] {
+			seen[lp] = true
+			lockPaths = append(lockPaths, lp)
+		}
+	}
+	sort.Strings(lockPaths)
 
 	lockCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	var locks []*flock.Flock
-	for _, path := range paths {
+	for _, path := range lockPaths {
 		fl := flock.New(path)
 		locked, err := fl.TryLockContext(lockCtx, 100*time.Millisecond)
 		if err != nil {
@@ -58,11 +73,4 @@ func Acquire(ctx context.Context, xhistPath, xlsxPath string) (*Unlocker, error)
 	}
 
 	return &Unlocker{locks: locks}, nil
-}
-
-func sortPaths(a, b string) []string {
-	if a <= b {
-		return []string{a, b}
-	}
-	return []string{b, a}
 }

@@ -29,7 +29,16 @@ func newStateCmd() *cli.Command {
 				return outputErrorTo(errW, "missing required argument: <file.xlsx>")
 			}
 
-			xhp := xhistPath(xlsxPath)
+			xhp, wsRoot, err := resolveWorkspaceReadOnly(cmd)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("workspace: %v", err))
+			}
+
+			targetFile, err := resolveTargetFile(wsRoot, xlsxPath)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("resolving target: %v", err))
+			}
+
 			f, err := os.Open(xhp)
 			if err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("opening %s: %v", xhp, err))
@@ -56,6 +65,9 @@ func newStateCmd() *cli.Command {
 				}
 				op, ok := rec.Parsed.(format.Op)
 				if !ok || op.Action != format.ActionWrite {
+					continue
+				}
+				if op.TargetFile != targetFile {
 					continue
 				}
 				if atSeq > 0 && op.Sequence > atSeq {
@@ -152,6 +164,9 @@ func newStateCmd() *cli.Command {
 								break
 							}
 							if op, ok := rec.Parsed.(format.Op); ok {
+								if op.TargetFile != targetFile {
+									continue
+								}
 								if atSeq > 0 && op.Sequence > atSeq {
 									break
 								}
@@ -169,6 +184,9 @@ func newStateCmd() *cli.Command {
 								}
 							}
 							if cop, ok := rec.Parsed.(format.CommentOp); ok {
+								if cop.TargetFile != targetFile {
+									continue
+								}
 								if atSeq > 0 && cop.Sequence > atSeq {
 									break
 								}

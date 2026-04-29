@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/prosights/xhist/internal/excel"
@@ -44,14 +45,28 @@ func newCommentSetCmd() *cli.Command {
 				return outputErrorTo(errW, "missing required argument: <range>")
 			}
 
-			xhp, err := ensureInit(xlsxPath)
+			xhp, wsRoot, err := resolveWorkspace(cmd)
 			if err != nil {
-				return outputErrorTo(errW, fmt.Sprintf("init: %v", err))
+				return outputErrorTo(errW, fmt.Sprintf("workspace: %v", err))
+			}
+			if err := requireV2(xhp); err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("version: %v", err))
+			}
+
+			targetFile, err := resolveTargetFile(wsRoot, xlsxPath)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("resolving target: %v", err))
 			}
 
 			sheet, topLeft, bottomRight, err := excel.ParseRange(rangeRef)
 			if err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("parsing range: %v", err))
+			}
+
+			if _, err := os.Stat(xlsxPath); os.IsNotExist(err) {
+				if err := excel.CreateWorkbook(xlsxPath); err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("creating workbook: %v", err))
+				}
 			}
 
 			author := cmd.String("author")
@@ -132,6 +147,7 @@ func newCommentSetCmd() *cli.Command {
 			defer f.Close()
 
 			cop := format.CommentOp{
+				TargetFile: targetFile,
 				Timestamp:  time.Now().UnixMilli(),
 				Sequence:   seq,
 				Action:     format.ActionCommentSet,
@@ -177,9 +193,9 @@ func newCommentGetCmd() *cli.Command {
 				return outputErrorTo(errW, "missing required argument: <range>")
 			}
 
-			xhp, err := ensureInit(xlsxPath)
+			xhp, _, err := resolveWorkspace(cmd)
 			if err != nil {
-				return outputErrorTo(errW, fmt.Sprintf("init: %v", err))
+				return outputErrorTo(errW, fmt.Sprintf("workspace: %v", err))
 			}
 
 			sheet, topLeft, bottomRight, err := excel.ParseRange(rangeRef)
@@ -261,9 +277,17 @@ func newCommentDeleteCmd() *cli.Command {
 				return outputErrorTo(errW, "missing required argument: <range>")
 			}
 
-			xhp, err := ensureInit(xlsxPath)
+			xhp, wsRoot, err := resolveWorkspace(cmd)
 			if err != nil {
-				return outputErrorTo(errW, fmt.Sprintf("init: %v", err))
+				return outputErrorTo(errW, fmt.Sprintf("workspace: %v", err))
+			}
+			if err := requireV2(xhp); err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("version: %v", err))
+			}
+
+			targetFile, err := resolveTargetFile(wsRoot, xlsxPath)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("resolving target: %v", err))
 			}
 
 			sheet, topLeft, bottomRight, err := excel.ParseRange(rangeRef)
@@ -332,6 +356,7 @@ func newCommentDeleteCmd() *cli.Command {
 			defer f.Close()
 
 			cop := format.CommentOp{
+				TargetFile: targetFile,
 				Timestamp:  time.Now().UnixMilli(),
 				Sequence:   seq,
 				Action:     format.ActionCommentDelete,

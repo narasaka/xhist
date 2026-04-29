@@ -15,22 +15,24 @@ type Record struct {
 
 // Header is the first record in an xhist file.
 type Header struct {
-	CreatedAt  int64
-	TargetFile string
+	CreatedAt     int64
+	TargetFile    string // v1 only
+	WorkspaceName string // v2 only
 }
 
 // Op is the core operation record.
 type Op struct {
-	Timestamp int64
-	Sequence  uint32
-	Action    uint8
-	Sheet     string
-	Range     string
-	Message   string
-	NumRows   uint32
-	NumCols   uint32
-	Cells     []Cell
-	Comments  []CommentEntry
+	TargetFile string
+	Timestamp  int64
+	Sequence   uint32
+	Action     uint8
+	Sheet      string
+	Range      string
+	Message    string
+	NumRows    uint32
+	NumCols    uint32
+	Cells      []Cell
+	Comments   []CommentEntry
 }
 
 // CommentEntry is one comment in a CommentOp or Op record.
@@ -42,6 +44,7 @@ type CommentEntry struct {
 
 // CommentOp is a standalone comment operation record.
 type CommentOp struct {
+	TargetFile string
 	Timestamp  int64
 	Sequence   uint32
 	Action     uint8
@@ -100,7 +103,7 @@ func encodeRecord(opcode uint8, payload []byte) []byte {
 	return out
 }
 
-// encodeHeaderPayload encodes a Header into its payload bytes.
+// encodeHeaderPayload encodes a v1 Header into its payload bytes.
 func encodeHeaderPayload(h Header) []byte {
 	var buf bytes.Buffer
 	var tmp [8]byte
@@ -110,7 +113,7 @@ func encodeHeaderPayload(h Header) []byte {
 	return buf.Bytes()
 }
 
-// decodeHeaderPayload decodes a Header from payload bytes.
+// decodeHeaderPayload decodes a v1 Header from payload bytes.
 func decodeHeaderPayload(data []byte) (Header, error) {
 	r := bytes.NewReader(data)
 	var h Header
@@ -125,10 +128,35 @@ func decodeHeaderPayload(data []byte) (Header, error) {
 	return h, nil
 }
 
-// encodeOpPayload encodes an Op into its payload bytes.
+func encodeHeaderPayloadV2(h Header) []byte {
+	var buf bytes.Buffer
+	var tmp [8]byte
+	binary.LittleEndian.PutUint64(tmp[:], uint64(h.CreatedAt))
+	buf.Write(tmp[:])
+	encodeLPString(&buf, h.WorkspaceName)
+	return buf.Bytes()
+}
+
+func decodeHeaderPayloadV2(data []byte) (Header, error) {
+	r := bytes.NewReader(data)
+	var h Header
+	if err := binary.Read(r, binary.LittleEndian, &h.CreatedAt); err != nil {
+		return h, err
+	}
+	var err error
+	h.WorkspaceName, err = decodeLPString(r)
+	if err != nil {
+		return h, err
+	}
+	return h, nil
+}
+
+// encodeOpPayload encodes an Op into its v2 payload bytes (with TargetFile).
 func encodeOpPayload(op Op) ([]byte, error) {
 	var buf bytes.Buffer
 	var tmp [8]byte
+
+	encodeLPString(&buf, op.TargetFile)
 
 	binary.LittleEndian.PutUint64(tmp[:], uint64(op.Timestamp))
 	buf.Write(tmp[:])
@@ -167,8 +195,7 @@ func encodeOpPayload(op Op) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// decodeOpPayload decodes an Op from payload bytes.
-func decodeOpPayload(data []byte) (Op, error) {
+func decodeOpPayloadV1(data []byte) (Op, error) {
 	r := bytes.NewReader(data)
 	var op Op
 
@@ -183,6 +210,75 @@ func decodeOpPayload(data []byte) (Op, error) {
 	}
 
 	var err error
+	op.Sheet, err = decodeLPString(r)
+	if err != nil {
+		return op, err
+	}
+	op.Range, err = decodeLPString(r)
+	if err != nil {
+		return op, err
+	}
+	op.Message, err = decodeLPString(r)
+	if err != nil {
+		return op, err
+	}
+
+	if err := binary.Read(r, binary.LittleEndian, &op.NumRows); err != nil {
+		return op, err
+	}
+	if err := binary.Read(r, binary.LittleEndian, &op.NumCols); err != nil {
+		return op, err
+	}
+
+	cellCount := int(op.NumRows) * int(op.NumCols)
+	op.Cells = make([]Cell, cellCount)
+	for i := 0; i < cellCount; i++ {
+		op.Cells[i], err = DecodeCell(r)
+		if err != nil {
+			return op, err
+		}
+	}
+
+	if r.Len() > 0 {
+		var hasComments uint8
+		if err := binary.Read(r, binary.LittleEndian, &hasComments); err == nil && hasComments == 1 {
+			var numComments uint32
+			if err := binary.Read(r, binary.LittleEndian, &numComments); err != nil {
+				return op, err
+			}
+			op.Comments = make([]CommentEntry, numComments)
+			for i := range numComments {
+				op.Comments[i], err = decodeCommentEntry(r)
+				if err != nil {
+					return op, err
+				}
+			}
+		}
+	}
+
+	return op, nil
+}
+
+func decodeOpPayloadV2(data []byte) (Op, error) {
+	r := bytes.NewReader(data)
+	var op Op
+	var err error
+
+	op.TargetFile, err = decodeLPString(r)
+	if err != nil {
+		return op, err
+	}
+
+	if err := binary.Read(r, binary.LittleEndian, &op.Timestamp); err != nil {
+		return op, err
+	}
+	if err := binary.Read(r, binary.LittleEndian, &op.Sequence); err != nil {
+		return op, err
+	}
+	if err := binary.Read(r, binary.LittleEndian, &op.Action); err != nil {
+		return op, err
+	}
+
 	op.Sheet, err = decodeLPString(r)
 	if err != nil {
 		return op, err
@@ -303,6 +399,8 @@ func encodeCommentOpPayload(c CommentOp) []byte {
 	var buf bytes.Buffer
 	var tmp [8]byte
 
+	encodeLPString(&buf, c.TargetFile)
+
 	binary.LittleEndian.PutUint64(tmp[:], uint64(c.Timestamp))
 	buf.Write(tmp[:])
 
@@ -325,7 +423,7 @@ func encodeCommentOpPayload(c CommentOp) []byte {
 	return buf.Bytes()
 }
 
-func decodeCommentOpPayload(data []byte) (CommentOp, error) {
+func decodeCommentOpPayloadV1(data []byte) (CommentOp, error) {
 	r := bytes.NewReader(data)
 	var c CommentOp
 
@@ -340,6 +438,54 @@ func decodeCommentOpPayload(data []byte) (CommentOp, error) {
 	}
 
 	var err error
+	c.Sheet, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	c.Range, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	c.Message, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+
+	if err := binary.Read(r, binary.LittleEndian, &c.NumEntries); err != nil {
+		return c, err
+	}
+
+	c.Entries = make([]CommentEntry, c.NumEntries)
+	for i := range c.NumEntries {
+		c.Entries[i], err = decodeCommentEntry(r)
+		if err != nil {
+			return c, err
+		}
+	}
+
+	return c, nil
+}
+
+func decodeCommentOpPayloadV2(data []byte) (CommentOp, error) {
+	r := bytes.NewReader(data)
+	var c CommentOp
+	var err error
+
+	c.TargetFile, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+
+	if err := binary.Read(r, binary.LittleEndian, &c.Timestamp); err != nil {
+		return c, err
+	}
+	if err := binary.Read(r, binary.LittleEndian, &c.Sequence); err != nil {
+		return c, err
+	}
+	if err := binary.Read(r, binary.LittleEndian, &c.Action); err != nil {
+		return c, err
+	}
+
 	c.Sheet, err = decodeLPString(r)
 	if err != nil {
 		return c, err

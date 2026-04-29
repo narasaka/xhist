@@ -197,11 +197,14 @@ func TestIndexEntryByteLayout(t *testing.T) {
 		t.Fatalf("action = %d, want ActionRead", action)
 	}
 
-	sheetLen := binary.LittleEndian.Uint16(entryData[22:24])
+	// v3: TargetFile comes before Sheet
+	fileLen := binary.LittleEndian.Uint16(entryData[22:24])
+	off := 24 + int(fileLen)
+	sheetLen := binary.LittleEndian.Uint16(entryData[off : off+2])
 	if sheetLen != 6 {
 		t.Fatalf("sheetLen = %d, want 6", sheetLen)
 	}
-	sheet := string(entryData[24 : 24+sheetLen])
+	sheet := string(entryData[off+2 : off+2+int(sheetLen)])
 	if sheet != "Sheet1" {
 		t.Fatalf("sheet = %q", sheet)
 	}
@@ -334,8 +337,8 @@ func TestIndexEntryV2ByteLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if idxData[6] != 0x02 {
-		t.Fatalf("index version = 0x%02x, want 0x02", idxData[6])
+	if idxData[6] != IndexVersionV3 {
+		t.Fatalf("index version = 0x%02x, want 0x%02x", idxData[6], IndexVersionV3)
 	}
 
 	entryCount := binary.LittleEndian.Uint32(idxData[15:19])
@@ -343,11 +346,15 @@ func TestIndexEntryV2ByteLayout(t *testing.T) {
 		t.Fatalf("entryCount = %d, want 3", entryCount)
 	}
 
-	// Find the CommentOp entry (second entry)
-	// First entry: 24 fixed bytes + len("Sheet1") = 30 bytes
-	firstEntrySize := 24 + 6
-	secondEntryStart := IndexPreambleSize + firstEntrySize
-	entry2 := idxData[secondEntryStart:]
+	// Skip first entry to find second: fixed 22 bytes + fileLen(2) + file + sheetLen(2) + sheet
+	pos := IndexPreambleSize
+	// First entry: read fileLen at pos+22
+	fileLen1 := binary.LittleEndian.Uint16(idxData[pos+22 : pos+24])
+	sheetLen1Off := pos + 24 + int(fileLen1)
+	sheetLen1 := binary.LittleEndian.Uint16(idxData[sheetLen1Off : sheetLen1Off+2])
+	pos = sheetLen1Off + 2 + int(sheetLen1)
+
+	entry2 := idxData[pos:]
 
 	opcode := entry2[8]
 	if opcode != OpcodeCommentOp {
@@ -367,5 +374,73 @@ func TestIndexEntryV2ByteLayout(t *testing.T) {
 	action := entry2[21]
 	if action != ActionCommentSet {
 		t.Fatalf("second entry action = %d, want ActionCommentSet", action)
+	}
+}
+
+func TestIndexV3WithTargetFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.xhist")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w, _ := NewWriter(f)
+	w.WriteHeader(1000, "my-workspace")
+	w.WriteOp(Op{
+		TargetFile: "file1.xlsx",
+		Timestamp:  2000, Sequence: 1, Action: ActionRead,
+		Sheet: "Sheet1", Range: "A1", Message: "read",
+		NumRows: 1, NumCols: 1, Cells: []Cell{{Type: CellString, String: "x"}},
+	})
+	w.WriteOp(Op{
+		TargetFile: "file2.xlsx",
+		Timestamp:  3000, Sequence: 2, Action: ActionWrite,
+		Sheet: "Sheet2", Range: "B1", Message: "write",
+		NumRows: 1, NumCols: 1, Cells: []Cell{{Type: CellNumber, Number: 42}},
+	})
+	w.WriteCommentOp(CommentOp{
+		TargetFile: "file1.xlsx",
+		Timestamp:  4000, Sequence: 3, Action: ActionCommentSet,
+		Sheet: "Sheet1", Range: "A1", Message: "comment",
+		NumEntries: 1, Entries: []CommentEntry{{Cell: "A1", Author: "bob", Text: "note"}},
+	})
+	f.Close()
+
+	if err := BuildIndex(path); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := ReadIndex(path + ".idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(entries) != 3 {
+		t.Fatalf("entry count = %d, want 3", len(entries))
+	}
+
+	if entries[0].TargetFile != "file1.xlsx" || entries[0].Sheet != "Sheet1" {
+		t.Fatalf("entry 0 = %+v", entries[0])
+	}
+	if entries[1].TargetFile != "file2.xlsx" || entries[1].Sheet != "Sheet2" {
+		t.Fatalf("entry 1 = %+v", entries[1])
+	}
+	if entries[2].TargetFile != "file1.xlsx" || entries[2].Opcode != OpcodeCommentOp {
+		t.Fatalf("entry 2 = %+v", entries[2])
+	}
+}
+
+func TestIndexPreambleV3Version(t *testing.T) {
+	dir := t.TempDir()
+	xhistPath := writeTestXhistFile(t, dir)
+	BuildIndex(xhistPath)
+
+	idxData, err := os.ReadFile(xhistPath + ".idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idxData[6] != IndexVersionV3 {
+		t.Fatalf("index version = 0x%02x, want 0x%02x", idxData[6], IndexVersionV3)
 	}
 }

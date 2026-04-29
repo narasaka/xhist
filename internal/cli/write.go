@@ -39,9 +39,17 @@ func newWriteCmd() *cli.Command {
 				return outputErrorTo(errW, "missing required argument: <range>")
 			}
 
-			xhp, err := ensureInit(xlsxPath)
+			xhp, wsRoot, err := resolveWorkspace(cmd)
 			if err != nil {
-				return outputErrorTo(errW, fmt.Sprintf("init: %v", err))
+				return outputErrorTo(errW, fmt.Sprintf("workspace: %v", err))
+			}
+			if err := requireV2(xhp); err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("version: %v", err))
+			}
+
+			targetFile, err := resolveTargetFile(wsRoot, xlsxPath)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("resolving target: %v", err))
 			}
 
 			sheet, topLeft, bottomRight, err := excel.ParseRange(rangeRef)
@@ -64,6 +72,12 @@ func newWriteCmd() *cli.Command {
 				cells, err = parseJSONGrid(jsonData)
 				if err != nil {
 					return outputErrorTo(errW, fmt.Sprintf("parsing values: %v", err))
+				}
+			}
+
+			if _, err := os.Stat(xlsxPath); os.IsNotExist(err) {
+				if err := excel.CreateWorkbook(xlsxPath); err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("creating workbook: %v", err))
 				}
 			}
 
@@ -161,16 +175,17 @@ func newWriteCmd() *cli.Command {
 			defer f.Close()
 
 			op := format.Op{
-				Timestamp: time.Now().UnixMilli(),
-				Sequence:  seq,
-				Action:    format.ActionWrite,
-				Sheet:     sheet,
-				Range:     displayRange,
-				Message:   cmd.String("message"),
-				NumRows:   uint32(rows),
-				NumCols:   uint32(cols),
-				Cells:     flat,
-				Comments:  commentEntries,
+				TargetFile: targetFile,
+				Timestamp:  time.Now().UnixMilli(),
+				Sequence:   seq,
+				Action:     format.ActionWrite,
+				Sheet:      sheet,
+				Range:      displayRange,
+				Message:    cmd.String("message"),
+				NumRows:    uint32(rows),
+				NumCols:    uint32(cols),
+				Cells:      flat,
+				Comments:   commentEntries,
 			}
 			if err := w.WriteOp(op); err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("writing op: %v", err))

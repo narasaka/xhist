@@ -1,24 +1,29 @@
 ---
 name: xhist
-description: "Use xhist CLI to read, write, and inspect Excel files with full operation history. MUST USE whenever the user asks to work with .xlsx spreadsheets, read or write cells, inspect spreadsheet data, or track changes to Excel files. Also use when the user mentions xhist, spreadsheet history, cell ranges, or wants to review what was previously done to a workbook. This skill ensures all Excel operations are logged and recoverable."
+description: "Use xhist CLI to read, write, and inspect Excel files with full operation history. MUST USE whenever the user asks to work with .xlsx spreadsheets, read or write cells, inspect spreadsheet data, or track changes to Excel files. Also use when the user mentions xhist, workspace history, cell ranges, or wants to review what was previously done in a project. This skill ensures all Excel operations are logged to a workspace-level history file and are recoverable."
 ---
 
-# xhist — Excel Operation Logger
+# xhist, Excel Operation Logger
 
-xhist is a CLI tool that proxies all Excel read/write operations through an append-only binary log. The agent never opens .xlsx files directly. Every operation goes through xhist, which records it for later replay.
+xhist is a CLI tool that proxies all Excel read/write operations through an append-only binary log. The agent never opens `.xlsx` files directly — every operation goes through xhist, which records it to a workspace-level history file.
 
 ## Why This Matters
 
-AI agents lose context between sessions. xhist solves this: every read and write is logged with timestamps, messages, and cell values. When starting a new session on a file with history, replay the log to recover full working context.
+xhist is both an interface and a memory layer:
+
+- **Interface**: every read, write, and comment the agent performs on a workbook goes through `xhist`. There is no other way to touch a `.xlsx` file.
+- **Memory / diary**: every operation is logged with a `-m "<reason>"` message, a timestamp, the cell values, the sheet/range, and the target file. When context is lost, replay the log with `xhist log` to see exactly what was done and why — concrete evidence, not guesses.
+
+Write messages like you would write git commit messages: explain *why* the write is happening and what the source was. The log is the only persistent memory that survives across agent turns and sessions.
 
 ## Core Concepts
 
-- One `.xhist` file tracks exactly one `.xlsx` file
-- `budget.xlsx` has its history in `budget.xhist` (same directory)
-- First operation auto-creates both files if needed
-- All output is JSON to stdout by default
-- Errors go to stderr as `{"error": "message"}` with exit code 1
-- Shell quoting: ranges with `!` must be single-quoted in interactive bash and zsh (e.g. `'Sheet1!A1'`)
+- One `.xhist` file tracks **all** `.xlsx` files in a workspace
+- Workspace discovery: xhist automatically walks up from the current directory to find the nearest `.xhist` file; if none is found, read/write/comment auto-create one
+- Use `--workspace <path>` to override discovery and point at a specific `.xhist` file
+- All output is JSON to stdout by default; `-H`/`--human` switches to a readable table for logs
+- Errors are emitted as `{"error": "message"}` on stderr with a non-zero exit code
+- Shell quoting: ranges with `!` must be single-quoted (e.g. `'Sheet1!A1'`)
 
 ## Cell Addressing
 
@@ -38,7 +43,7 @@ Always single-quote ranges containing `!` to prevent shell history expansion.
 | JSON | Excel Type |
 |------|------------|
 | `"text"` | String |
-| `42`, `3.14` | Number |
+| `42`, `3.14`, `-456` | Number |
 | `true`, `false` | Boolean |
 | `null` | Empty cell |
 | `"=SUM(A1:A10)"` | Formula (string starting with `=`) |
@@ -48,7 +53,17 @@ Ranges are row-major arrays of arrays:
 [["Name", "Q1", "Q2"], ["Revenue", 1000, 2000]]
 ```
 
+Reads always return the **raw stored value** — numbers come back as JSON numbers, not as display-formatted strings. A cell that renders as `"231,521"` or `"(456)"` in Excel is returned as `231521` and `-456` respectively.
+
 ## Commands
+
+### Initialize workspace (optional)
+
+```bash
+xhist init [name] --agent "my-agent" --model "gpt-4" --session "abc-123"
+```
+
+Creates `{name}.xhist` in the current directory. Not required; `read`, `write`, and `comment` auto-create a workspace log if none is found.
 
 ### Discover structure
 
@@ -61,199 +76,167 @@ Returns sheet names with row/column counts. Does not log an operation.
 ### Read cells
 
 ```bash
-# Single cell (returns scalar)
-xhist read budget.xlsx 'Sheet1!A1'
-
-# Range (returns 2D array)
-xhist read budget.xlsx 'Sheet1!A1:C10' -m "Reading quarterly data"
-
-# Read without logging (for internal checks)
-xhist read budget.xlsx 'Sheet1!A1:C10' --no-log
+xhist read budget.xlsx 'Sheet1!A1'                                   # single cell → scalar
+xhist read budget.xlsx 'Sheet1!A1:C10' -m "Reading quarterly data"   # range → 2D array
+xhist read budget.xlsx 'Sheet1!A1:C10' --no-log                      # skip logging
 ```
 
-The `-m` flag is optional on reads but recommended for context.
+The `-m` flag is optional on reads. Use it to leave a trail of reasoning.
 
 ### Write cells
 
 ```bash
-# Single cell
+# Single positive value
 xhist write budget.xlsx 'Sheet1!A1' "Revenue" -m "Adding header"
+xhist write budget.xlsx 'Sheet1!B1' 1000 -m "Adding revenue value"
 
-# Range from JSON
+# Negative numbers: put flags first, then `--`, then the value, so the shell
+# does not interpret `-1234` as a flag.
+xhist write budget.xlsx 'Sheet1!B2' -m "Net loss" -- -1234
+
+# Alternative for negative numbers or any literal: use --json with a scalar
+xhist write budget.xlsx 'Sheet1!B2' --json '-1234' -m "Net loss"
+
+# Range from inline JSON
 xhist write budget.xlsx 'Sheet1!A1:B2' --json '[["Name","Value"],["Revenue",1000]]' -m "Adding data"
 
-# Range from file
-xhist write budget.xlsx 'Sheet1!A1:B2' -f data.json -m "Importing data"
-
-# Range from stdin
-echo '[["A","B"]]' | xhist write budget.xlsx 'Sheet1!A1:B1' --stdin -m "Piped data"
+# Range from file or stdin
+xhist write budget.xlsx 'Sheet1!A1:B2' -f data.json -m "From file"
+echo '[["A","B"]]' | xhist write budget.xlsx 'Sheet1!A1:B1' --stdin -m "From stdin"
 ```
 
-The `-m` flag is required on writes. Always explain why the write is being performed.
+The `-m` flag is **required** on writes. Always explain why the write is being performed and cite the source.
 
-Output on success: `{"seq": 1, "cells_written": 2}`
+Output on success: `{"seq": <N>, "cells_written": <M>}`.
 
-#### Writing with comments
+### Manage cell comments
 
-Attach comments (citations, sources) to cells in the same write operation:
-
-```bash
-# Single cell: value + comment
-xhist write budget.xlsx 'Sheet1!A1' "1250000" \
-  -m "Q1 revenue" \
-  --comment "Source: SAP report FY2025-Q1, pulled 2025-03-15"
-
-# Range: values + per-cell comments via JSON
-xhist write budget.xlsx 'Sheet1!A1:B2' \
-  --json '[["Revenue","Cost"],["1250000","830000"]]' \
-  --comments '[["Source: SAP FY25-Q1","Source: SAP FY25-Q1"],["","Source: Oracle ERP"]]' \
-  -m "Q1 financials with sources"
-
-# Custom author (default is "xhist")
-xhist write budget.xlsx 'Sheet1!A1' "value" -m "msg" --comment "note" --comment-author "agent-1"
-```
-
-- `--comment <text>` — single comment for single-cell writes only
-- `--comments <json>` — 2D array of comment strings matching the value grid. Empty string = no comment.
-- `--comment-author <name>` — author for all comments in this write (default: "xhist")
-- Comments appear as native Excel comments/notes when the workbook is opened
-
-Output: `{"seq": 1, "cells_written": 1, "comments_written": 1}`
-
-### Manage comments
-
-Set, get, or delete cell comments independently of cell values:
+Comments are native Excel notes; they persist in the workbook and are also recorded in the operation log. Use them for citations and provenance.
 
 ```bash
-# Set comment on a single cell
-xhist comment set budget.xlsx 'Sheet1!A1' "Updated citation: annual report p.42" \
-  --author "agent-1" -m "Correcting source"
+# Set a comment on a single cell (requires -m)
+xhist comment set budget.xlsx 'Sheet1!A1' "Source: SAP FY25-Q1" \
+  -m "Citation for Q1 revenue" --author "agent-1"
 
-# Set comments on a range via JSON
+# Set comments on a range via JSON grid (empty string = no comment)
 xhist comment set budget.xlsx 'Sheet1!A1:B2' \
   --json '[["Source: SAP",""],["Source: Oracle","Source: Bloomberg"]]' \
-  --author "agent-1" -m "Adding citations"
+  -m "Adding citations" --author "agent-1"
 
-# Get comment from a single cell
+# Get a single cell's comment (no -m required)
 xhist comment get budget.xlsx 'Sheet1!A1'
-# → {"cell": "A1", "author": "agent-1", "text": "Source: SAP report FY2025-Q1"}
+# → {"cell": "A1", "author": "agent-1", "text": "Source: SAP FY25-Q1"}
 
-# Get comments from a range (sparse — only cells with comments)
+# Get all comments in a range (sparse — only cells with comments appear)
 xhist comment get budget.xlsx 'Sheet1!A1:C10'
-# → [{"cell": "A1", "author": "...", "text": "..."}, ...]
 
-# Delete comment from a cell
-xhist comment delete budget.xlsx 'Sheet1!A1' -m "Removing outdated citation"
+# Delete a cell's comment (requires -m)
+xhist comment delete budget.xlsx 'Sheet1!A1' -m "Removing stale citation"
 
-# Delete comments from a range
+# Delete all comments in a range
 xhist comment delete budget.xlsx 'Sheet1!A1:C10' -m "Clearing all citations"
 ```
 
-The `-m` flag is required on `set` and `delete`. The `get` action does not require it.
+`xhist comment --help` lists the three subcommands if you ever forget.
 
 ### Review history
 
 ```bash
-# Full log (includes both read/write ops and comment ops)
-xhist log budget.xlsx
-
-# Filter by action (read, write, comment_set, comment_get, comment_delete)
-xhist log budget.xlsx --action write
-xhist log budget.xlsx --action comment_set
-
-# Include cell values
-xhist log budget.xlsx --last 3 --with-values
-
-# Human-readable table
-xhist log budget.xlsx --human
-
-# Stream new operations in real time (NDJSON)
-xhist log budget.xlsx --follow
+xhist log                                       # full workspace log
+xhist log budget.xlsx                           # filter by target file
+xhist log --action write                        # only writes
+xhist log --action read                         # only reads
+xhist log --action comment                      # all comment ops (set + get + delete)
+xhist log --action comment_set                  # only comment set ops
+xhist log --last 10 --with-values               # last 10 ops, include cell values
+xhist log --since 2024-01-01T00:00:00Z          # ops after a timestamp
+xhist log --sheet Sheet1                        # only ops on Sheet1
+xhist log --human                               # readable table instead of JSON
+xhist log --follow                              # stream new ops (NDJSON)
 ```
+
+`--action comment` matches all three comment subtypes (`comment_set`, `comment_get`, `comment_delete`) as a shorthand.
 
 ### Show a specific operation
 
 ```bash
-xhist show budget.xlsx 3
+xhist show 42
 ```
 
-Returns full details including cell values for operation with sequence number 3. Works for both read/write ops and comment ops.
+Returns full details for operation sequence number 42, including cell values and comment entries.
 
 ### Recover context (new session)
 
-When resuming work on a file:
+Treat the log as your diary. Before writing anything new, read what was already done:
 
 ```bash
-xhist info budget.xlsx                        # scope and stats
-xhist log budget.xlsx --last 20               # recent operations
-xhist log budget.xlsx --last 5 --with-values  # recent values
+xhist info                                        # workspace overview, file list
+xhist log --last 20 --with-values                 # recent timeline with values
+xhist log budget.xlsx --last 5 --with-values      # focus on one file
+xhist log --action comment --with-values          # recall all citations
+xhist state budget.xlsx                           # full reconstructed state
 ```
 
 ### Reconstruct state
 
 ```bash
-# Replay all writes to reconstruct known state
-xhist state budget.xlsx
-
-# State as of operation 10
-xhist state budget.xlsx --at 10
-
-# Compare reconstructed state vs actual file (detect out-of-band edits)
-xhist state budget.xlsx --diff
-
-# Include comment state in reconstruction
-xhist state budget.xlsx --with-comments
+xhist state budget.xlsx                    # reconstruct sheet grid from WRITE ops
+xhist state budget.xlsx --at 10            # state as of operation 10
+xhist state budget.xlsx --range Sheet1!A1:C10
+xhist state budget.xlsx --sheet Sheet1
+xhist state budget.xlsx --diff             # compare vs actual xlsx (detect out-of-band edits)
+xhist state budget.xlsx --with-comments    # include comment state per sheet
 ```
 
-### Initialize explicitly
+With `--with-comments`, each sheet object has a `comments` array of `{cell, author, text}` entries in addition to `range` and `values`.
+
+### Maintenance
 
 ```bash
-xhist init budget.xlsx --agent "my-agent" --model "gpt-4" --session "abc-123"
+xhist verify                          # check workspace log integrity
+xhist reindex                         # rebuild sidecar index
+xhist repair                          # truncate corrupted log at last valid record
+xhist migrate                         # import legacy v1 .xhist files into a v2 workspace
 ```
 
-Optional. Other commands auto-initialize. Use when you want to record agent metadata upfront.
-
-### Integrity and maintenance
+### Global flags
 
 ```bash
-# Check file integrity
-xhist verify budget.xlsx
-
-# Repair corrupted file (truncate at last valid record)
-xhist repair budget.xlsx --dry-run
-xhist repair budget.xlsx
-
-# Rebuild sidecar index
-xhist reindex budget.xlsx
+xhist --workspace /path/to/ws.xhist ...   # override workspace discovery
+xhist --human ...                          # human-readable output where supported
+xhist --version                            # show version
 ```
 
 ## Recommended Workflow
 
-### First time with a file
+### First time in a workspace
 
 ```bash
-xhist sheets budget.xlsx                           # discover structure
-xhist read budget.xlsx 'Sheet1!A1:Z1' -m "Headers" # read headers
-xhist read budget.xlsx 'Sheet1!A1:D20' -m "Data"   # read data
-# ... analyze and write changes ...
-xhist write budget.xlsx 'Sheet1!E1' "Growth" -m "Adding growth rate column"
-xhist write budget.xlsx 'Sheet1!E2:E20' --json '[...]' -m "Calculating growth rates"
+xhist sheets budget.xlsx                                    # discover structure
+xhist read budget.xlsx 'Sheet1!A1:Z1' -m "Read headers"     # understand layout
+xhist read budget.xlsx 'Sheet1!A1:D20' -m "Read data"       # sample values
+# analyze...
+xhist write budget.xlsx 'Sheet1!E1' "Growth" -m "Adding growth column from 2024 10-K p.47"
+xhist comment set budget.xlsx 'Sheet1!E1' "Source: 2024 10-K p.47" -m "Citation" --author "agent-1"
 ```
 
 ### Resuming after context loss
 
 ```bash
-xhist info budget.xlsx                             # understand scope
-xhist log budget.xlsx --last 20                    # recall recent ops
-xhist log budget.xlsx --last 5 --with-values       # see actual values
-# ... continue work ...
+xhist info                                          # what files are tracked?
+xhist log --last 20 --with-values                   # what happened recently?
+xhist log --action comment --with-values            # what citations exist?
+xhist state budget.xlsx --with-comments             # current known grid + comments
+# continue work from here
 ```
 
 ## Common Mistakes
 
-- Forgetting `-m` on writes (it is required, the command will fail)
-- Not quoting `!` in ranges (`Sheet1!A1` triggers history expansion in interactive bash and zsh, use `'Sheet1!A1'`)
-- Passing `.xhist` instead of `.xlsx` as the file argument
+- Forgetting `-m` on writes, `comment set`, or `comment delete` (it is required, commands fail without it)
+- Using bare `xhist comment ...` — you must use the subcommand: `xhist comment set|get|delete`
+- Using `--action comment_write` or `--action comment_setting` etc. — the valid action filters are `read`, `write`, `comment` (shorthand), `comment_set`, `comment_get`, `comment_delete`
+- Writing a negative number without a `--` terminator or `--json`: `xhist write f.xlsx A1 -456 -m "..."` will be parsed as `-4` flag; use `xhist write f.xlsx A1 -m "..." -- -456` or `--json '-456'`
+- Not quoting `!` in ranges — always use `'Sheet1!A1'`
+- Passing `.xhist` instead of `.xlsx` as the file argument for read/write
 - Writing formulas without the `=` prefix (they will be stored as strings)
-- Using `--comment` with range writes (use `--comments` with a JSON grid instead)
-- Using `--comments` with single-cell writes (use `--comment` instead)
+- Expecting `xhist read` to return formatted strings — it returns raw values; compare raw against raw

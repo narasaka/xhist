@@ -14,12 +14,12 @@ func newReindexCmd() *cli.Command {
 		Usage: "Rebuild the sidecar index from the log",
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			errW := cmdErr(cmd)
-			xlsxPath := cmd.Args().Get(0)
-			if xlsxPath == "" {
-				return outputErrorTo(errW, "missing required argument: <file.xlsx>")
+
+			xhp, _, err := resolveWorkspaceReadOnly(cmd)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("workspace: %v", err))
 			}
 
-			xhp := xhistPath(xlsxPath)
 			if err := format.BuildIndex(xhp); err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("building index: %v", err))
 			}
