@@ -67,6 +67,9 @@ func TestOpcodes(t *testing.T) {
 	if OpcodeCommentOp != 0x04 {
 		t.Fatal("OpcodeCommentOp wrong")
 	}
+	if OpcodeConfuseOp != 0x05 {
+		t.Fatal("OpcodeConfuseOp wrong")
+	}
 	if OpcodeFooter != 0xFF {
 		t.Fatal("OpcodeFooter wrong")
 	}
@@ -90,6 +93,18 @@ func TestCommentActionTypes(t *testing.T) {
 	}
 	if ActionCommentDelete != 3 {
 		t.Fatal("ActionCommentDelete wrong")
+	}
+}
+
+func TestConfusionActionTypes(t *testing.T) {
+	if ActionConfusionRaise != 1 {
+		t.Fatal("ActionConfusionRaise wrong")
+	}
+	if ActionConfusionResolve != 2 {
+		t.Fatal("ActionConfusionResolve wrong")
+	}
+	if ActionConfusionSkip != 3 {
+		t.Fatal("ActionConfusionSkip wrong")
 	}
 }
 

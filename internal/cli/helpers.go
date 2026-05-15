@@ -162,6 +162,10 @@ func lastSequence(xhistPath string) (uint32, error) {
 			if v.Sequence > maxSeq {
 				maxSeq = v.Sequence
 			}
+		case format.ConfuseOp:
+			if v.Sequence > maxSeq {
+				maxSeq = v.Sequence
+			}
 		}
 	}
 	return maxSeq, nil

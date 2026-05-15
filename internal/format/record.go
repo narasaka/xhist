@@ -55,6 +55,23 @@ type CommentOp struct {
 	Entries    []CommentEntry
 }
 
+// ConfuseOp is a standalone confusion/reconciliation operation record.
+type ConfuseOp struct {
+	TargetFile     string
+	Timestamp      int64
+	Sequence       uint32
+	Action         uint8
+	ID             string
+	Sheet          string
+	Cell           string
+	Archetype      string
+	Headline       string
+	Description    string
+	PayloadJSON    string
+	ResolutionJSON string
+	Message        string
+}
+
 // Metadata is a key-value pair record.
 type Metadata struct {
 	Key   string
@@ -149,6 +166,85 @@ func decodeHeaderPayloadV2(data []byte) (Header, error) {
 		return h, err
 	}
 	return h, nil
+}
+
+func encodeConfuseOpPayload(c ConfuseOp) []byte {
+	var buf bytes.Buffer
+	var tmp [8]byte
+
+	encodeLPString(&buf, c.TargetFile)
+	binary.LittleEndian.PutUint64(tmp[:], uint64(c.Timestamp))
+	buf.Write(tmp[:])
+	binary.LittleEndian.PutUint32(tmp[:4], c.Sequence)
+	buf.Write(tmp[:4])
+	buf.WriteByte(c.Action)
+	encodeLPString(&buf, c.ID)
+	encodeLPString(&buf, c.Sheet)
+	encodeLPString(&buf, c.Cell)
+	encodeLPString(&buf, c.Archetype)
+	encodeLPString(&buf, c.Headline)
+	encodeLPString(&buf, c.Description)
+	encodeLPString(&buf, c.PayloadJSON)
+	encodeLPString(&buf, c.ResolutionJSON)
+	encodeLPString(&buf, c.Message)
+	return buf.Bytes()
+}
+
+func decodeConfuseOpPayload(data []byte) (ConfuseOp, error) {
+	r := bytes.NewReader(data)
+	var c ConfuseOp
+	var err error
+
+	c.TargetFile, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	if err := binary.Read(r, binary.LittleEndian, &c.Timestamp); err != nil {
+		return c, err
+	}
+	if err := binary.Read(r, binary.LittleEndian, &c.Sequence); err != nil {
+		return c, err
+	}
+	if err := binary.Read(r, binary.LittleEndian, &c.Action); err != nil {
+		return c, err
+	}
+	c.ID, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	c.Sheet, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	c.Cell, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	c.Archetype, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	c.Headline, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	c.Description, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	c.PayloadJSON, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	c.ResolutionJSON, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	c.Message, err = decodeLPString(r)
+	if err != nil {
+		return c, err
+	}
+	return c, nil
 }
 
 // encodeOpPayload encodes an Op into its v2 payload bytes (with TargetFile).

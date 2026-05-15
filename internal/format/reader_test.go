@@ -175,6 +175,51 @@ func TestReaderAllRecords(t *testing.T) {
 	}
 }
 
+func TestReaderConfuseOpRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	w, err := NewWriter(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.WriteHeader(1000, "workspace"); err != nil {
+		t.Fatal(err)
+	}
+	want := ConfuseOp{
+		TargetFile:     "budget.xlsx",
+		Timestamp:      2000,
+		Sequence:       1,
+		Action:         ActionConfusionRaise,
+		ID:             "c1",
+		Sheet:          "Sheet1",
+		Cell:           "B2",
+		Archetype:      "GAP",
+		Headline:       "Missing value",
+		Description:    "No source value found",
+		PayloadJSON:    `{"sourceField":"Revenue"}`,
+		ResolutionJSON: `{"value":"123","confidence":"high"}`,
+		Message:        "needs reconciliation",
+	}
+	if err := w.WriteConfuseOp(want); err != nil {
+		t.Fatal(err)
+	}
+
+	rd, err := NewReader(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rd.Next(); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := rd.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rec.Parsed.(ConfuseOp)
+	if got != want {
+		t.Fatalf("confuse op = %+v, want %+v", got, want)
+	}
+}
+
 func TestReaderCRCCorruption(t *testing.T) {
 	data := writeTestFile(t)
 

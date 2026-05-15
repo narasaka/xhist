@@ -112,6 +112,10 @@ func (wr *Writer) WriteCommentOp(c CommentOp) error {
 	return wr.writeRecord(OpcodeCommentOp, wr.buf.Bytes())
 }
 
+func (wr *Writer) WriteConfuseOp(c ConfuseOp) error {
+	return wr.writeRecord(OpcodeConfuseOp, encodeConfuseOpPayload(c))
+}
+
 // WriteMetadata writes a Metadata record.
 func (wr *Writer) WriteMetadata(key, value string) error {
 	wr.buf.Reset()

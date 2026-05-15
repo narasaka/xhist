@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -13,37 +14,58 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+func jsonRaw(s string) any {
+	var v any
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		return s
+	}
+	return v
+}
+
 type logRecord struct {
 	Op        *format.Op
 	CommentOp *format.CommentOp
+	ConfuseOp *format.ConfuseOp
 }
 
 func (lr logRecord) sequence() uint32 {
 	if lr.Op != nil {
 		return lr.Op.Sequence
 	}
-	return lr.CommentOp.Sequence
+	if lr.CommentOp != nil {
+		return lr.CommentOp.Sequence
+	}
+	return lr.ConfuseOp.Sequence
 }
 
 func (lr logRecord) timestamp() int64 {
 	if lr.Op != nil {
 		return lr.Op.Timestamp
 	}
-	return lr.CommentOp.Timestamp
+	if lr.CommentOp != nil {
+		return lr.CommentOp.Timestamp
+	}
+	return lr.ConfuseOp.Timestamp
 }
 
 func (lr logRecord) sheet() string {
 	if lr.Op != nil {
 		return lr.Op.Sheet
 	}
-	return lr.CommentOp.Sheet
+	if lr.CommentOp != nil {
+		return lr.CommentOp.Sheet
+	}
+	return lr.ConfuseOp.Sheet
 }
 
 func (lr logRecord) targetFile() string {
 	if lr.Op != nil {
 		return lr.Op.TargetFile
 	}
-	return lr.CommentOp.TargetFile
+	if lr.CommentOp != nil {
+		return lr.CommentOp.TargetFile
+	}
+	return lr.ConfuseOp.TargetFile
 }
 
 func newLogCmd() *cli.Command {
@@ -172,6 +194,9 @@ func scanRecords(xhp string) ([]logRecord, error) {
 		case format.CommentOp:
 			cop := v
 			records = append(records, logRecord{CommentOp: &cop})
+		case format.ConfuseOp:
+			cop := v
+			records = append(records, logRecord{ConfuseOp: &cop})
 		}
 	}
 	return records, nil
@@ -239,6 +264,9 @@ func filterRecords(records []logRecord, cmd *cli.Command, fileFilter string) []l
 			if lr.CommentOp != nil && !actionMatches(commentActionString(lr.CommentOp.Action), actionFilter) {
 				continue
 			}
+			if lr.ConfuseOp != nil && !actionMatches(confusionActionString(lr.ConfuseOp.Action), actionFilter) {
+				continue
+			}
 		}
 		if sinceTS > 0 && lr.timestamp() <= sinceTS {
 			continue
@@ -277,7 +305,21 @@ func actionMatches(actual, filter string) bool {
 	if actual == filter {
 		return true
 	}
-	return filter == "comment" && strings.HasPrefix(actual, "comment_")
+	return (filter == "comment" && strings.HasPrefix(actual, "comment_")) ||
+		(filter == "confusion" && strings.HasPrefix(actual, "confusion_"))
+}
+
+func confusionActionString(a uint8) string {
+	switch a {
+	case format.ActionConfusionRaise:
+		return "confusion_raise"
+	case format.ActionConfusionResolve:
+		return "confusion_resolve"
+	case format.ActionConfusionSkip:
+		return "confusion_skip"
+	default:
+		return fmt.Sprintf("confusion_unknown(%d)", a)
+	}
 }
 
 func opToMap(op format.Op, withValues bool) map[string]any {
@@ -299,6 +341,30 @@ func opToMap(op format.Op, withValues bool) map[string]any {
 func recordToMap(lr logRecord, withValues bool) map[string]any {
 	if lr.Op != nil {
 		return opToMap(*lr.Op, withValues)
+	}
+	if lr.ConfuseOp != nil {
+		cop := lr.ConfuseOp
+		m := map[string]any{
+			"seq":         cop.Sequence,
+			"ts":          time.UnixMilli(cop.Timestamp).UTC().Format(time.RFC3339),
+			"type":        "confusion",
+			"action":      confusionActionString(cop.Action),
+			"id":          cop.ID,
+			"sheet":       cop.Sheet,
+			"cell":        cop.Cell,
+			"archetype":   cop.Archetype,
+			"headline":    cop.Headline,
+			"description": cop.Description,
+			"message":     cop.Message,
+			"file":        cop.TargetFile,
+		}
+		if cop.PayloadJSON != "" {
+			m["payload"] = jsonRaw(cop.PayloadJSON)
+		}
+		if cop.ResolutionJSON != "" {
+			m["resolution"] = jsonRaw(cop.ResolutionJSON)
+		}
+		return m
 	}
 	cop := lr.CommentOp
 	m := map[string]any{
@@ -353,13 +419,23 @@ func printHumanLog(w io.Writer, records []logRecord) {
 			msg = lr.Op.Message
 			file = lr.Op.TargetFile
 		} else {
-			seq = lr.CommentOp.Sequence
-			ts = time.UnixMilli(lr.CommentOp.Timestamp).UTC().Format(time.RFC3339)
-			action = strings.ToUpper(commentActionString(lr.CommentOp.Action))
-			sheet = lr.CommentOp.Sheet
-			rng = lr.CommentOp.Range
-			msg = lr.CommentOp.Message
-			file = lr.CommentOp.TargetFile
+			if lr.CommentOp != nil {
+				seq = lr.CommentOp.Sequence
+				ts = time.UnixMilli(lr.CommentOp.Timestamp).UTC().Format(time.RFC3339)
+				action = strings.ToUpper(commentActionString(lr.CommentOp.Action))
+				sheet = lr.CommentOp.Sheet
+				rng = lr.CommentOp.Range
+				msg = lr.CommentOp.Message
+				file = lr.CommentOp.TargetFile
+			} else {
+				seq = lr.ConfuseOp.Sequence
+				ts = time.UnixMilli(lr.ConfuseOp.Timestamp).UTC().Format(time.RFC3339)
+				action = strings.ToUpper(confusionActionString(lr.ConfuseOp.Action))
+				sheet = lr.ConfuseOp.Sheet
+				rng = lr.ConfuseOp.Cell
+				msg = lr.ConfuseOp.Message
+				file = lr.ConfuseOp.TargetFile
+			}
 		}
 		fmt.Fprintf(w, " %-5d %-22s %-14s %-10s %-12s %-20s %s\n", seq, ts, action, sheet, rng, file, msg)
 	}
@@ -402,6 +478,9 @@ func followLog(ctx context.Context, xhp string, cmd *cli.Command, fileFilter str
 						continue
 					}
 					if lr.CommentOp != nil && !actionMatches(commentActionString(lr.CommentOp.Action), actionFilter) {
+						continue
+					}
+					if lr.ConfuseOp != nil && !actionMatches(confusionActionString(lr.ConfuseOp.Action), actionFilter) {
 						continue
 					}
 				}

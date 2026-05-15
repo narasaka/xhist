@@ -11,7 +11,7 @@ xhist is a CLI tool that proxies all Excel read/write operations through an appe
 
 xhist is both an interface and a memory layer:
 
-- **Interface**: every read, write, and comment the agent performs on a workbook goes through `xhist`. There is no other way to touch a `.xlsx` file.
+- **Interface**: every read, write, comment, and confusion/resolution the agent performs on a workbook goes through `xhist`. There is no other durable artifact for spreadsheet work.
 - **Memory / diary**: every operation is logged with a `-m "<reason>"` message, a timestamp, the cell values, the sheet/range, and the target file. When context is lost, replay the log with `xhist log` to see exactly what was done and why — concrete evidence, not guesses.
 
 Write messages like you would write git commit messages: explain *why* the write is happening and what the source was. The log is the only persistent memory that survives across agent turns and sessions.
@@ -19,7 +19,7 @@ Write messages like you would write git commit messages: explain *why* the write
 ## Core Concepts
 
 - One `.xhist` file tracks **all** `.xlsx` files in a workspace
-- Workspace discovery: xhist automatically walks up from the current directory to find the nearest `.xhist` file; if none is found, read/write/comment auto-create one
+- Workspace discovery: xhist automatically walks up from the current directory to find the nearest `.xhist` file; if none is found, read/write/comment/confuse auto-create one
 - Use `--workspace <path>` to override discovery and point at a specific `.xhist` file
 - All output is JSON to stdout by default; `-H`/`--human` switches to a readable table for logs
 - Errors are emitted as `{"error": "message"}` on stderr with a non-zero exit code
@@ -139,6 +139,40 @@ xhist comment delete budget.xlsx 'Sheet1!A1:C10' -m "Clearing all citations"
 
 `xhist comment --help` lists the three subcommands if you ever forget.
 
+### Record confusions
+
+Use `xhist confuse` when you cannot confidently write a value yet. Confusions are stored in the same `.xhist` artifact as reads, writes, and comments.
+
+```bash
+# Raise a cell-level confusion
+xhist confuse raise budget.xlsx 'Sheet1!B2' \
+  --archetype GAP \
+  --headline "Missing revenue value" \
+  --description "No source value was found for the requested period" \
+  --payload '{"sourceField":"Revenue"}' \
+  -m "Needs reconciliation before writing"
+
+# Resolve it later
+xhist confuse resolve <id> \
+  --value 123 \
+  --confidence high \
+  --reasoning "Source row confirms 123" \
+  --source auto \
+  -m "Resolved from source workbook"
+
+# Or skip it with a reason
+xhist confuse skip <id> -r "Out of scope for this deliverable"
+```
+
+Supported action filters:
+
+```bash
+xhist log --action confusion          # all confusion ops
+xhist log --action confusion_raise    # only raised confusions
+xhist log --action confusion_resolve  # only resolutions
+xhist log --action confusion_skip     # only skipped confusions
+```
+
 ### Review history
 
 ```bash
@@ -148,6 +182,7 @@ xhist log --action write                        # only writes
 xhist log --action read                         # only reads
 xhist log --action comment                      # all comment ops (set + get + delete)
 xhist log --action comment_set                  # only comment set ops
+xhist log --action confusion                    # all confusion ops (raise + resolve + skip)
 xhist log --last 10 --with-values               # last 10 ops, include cell values
 xhist log --since 2024-01-01T00:00:00Z          # ops after a timestamp
 xhist log --sheet Sheet1                        # only ops on Sheet1
@@ -155,7 +190,7 @@ xhist log --human                               # readable table instead of JSON
 xhist log --follow                              # stream new ops (NDJSON)
 ```
 
-`--action comment` matches all three comment subtypes (`comment_set`, `comment_get`, `comment_delete`) as a shorthand.
+`--action comment` matches all three comment subtypes (`comment_set`, `comment_get`, `comment_delete`) as a shorthand. `--action confusion` matches all three confusion subtypes (`confusion_raise`, `confusion_resolve`, `confusion_skip`).
 
 ### Show a specific operation
 
@@ -163,7 +198,7 @@ xhist log --follow                              # stream new ops (NDJSON)
 xhist show 42
 ```
 
-Returns full details for operation sequence number 42, including cell values and comment entries.
+Returns full details for operation sequence number 42, including cell values, comment entries, or confusion payload/resolution details.
 
 ### Recover context (new session)
 
@@ -174,6 +209,7 @@ xhist info                                        # workspace overview, file lis
 xhist log --last 20 --with-values                 # recent timeline with values
 xhist log budget.xlsx --last 5 --with-values      # focus on one file
 xhist log --action comment --with-values          # recall all citations
+xhist log --action confusion                      # recall unresolved/reconciled confusions
 xhist state budget.xlsx                           # full reconstructed state
 ```
 

@@ -24,6 +24,7 @@ const (
 	OpcodeOp        uint8 = 0x02
 	OpcodeMetadata  uint8 = 0x03
 	OpcodeCommentOp uint8 = 0x04
+	OpcodeConfuseOp uint8 = 0x05
 	OpcodeFooter    uint8 = 0xFF
 )
 
@@ -38,6 +39,13 @@ const (
 	ActionCommentSet    uint8 = 1
 	ActionCommentGet    uint8 = 2
 	ActionCommentDelete uint8 = 3
+)
+
+// Confusion action types for ConfuseOp records.
+const (
+	ActionConfusionRaise   uint8 = 1
+	ActionConfusionResolve uint8 = 2
+	ActionConfusionSkip    uint8 = 3
 )
 
 // Cell type tags.

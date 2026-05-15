@@ -36,6 +36,7 @@ func buildRootCommand() *cli.Command {
 			newRepairCmd(),
 			newReindexCmd(),
 			newCommentCmd(),
+			newConfuseCmd(),
 			newMigrateCmd(),
 		},
 	}

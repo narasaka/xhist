@@ -135,6 +135,15 @@ func (rd *Reader) Next() (*ParsedRecord, error) {
 			parsed.TargetFile = rd.targetFile
 			rec.Parsed = parsed
 		}
+	case OpcodeConfuseOp:
+		if rd.version != VersionV2 {
+			return nil, &ErrCorruption{Offset: recordStart, Msg: "confuse records require v2 logs"}
+		}
+		parsed, err := decodeConfuseOpPayload(payload)
+		if err != nil {
+			return nil, &ErrCorruption{Offset: recordStart, Msg: "invalid confuse op payload: " + err.Error()}
+		}
+		rec.Parsed = parsed
 	case OpcodeMetadata:
 		parsed, err := decodeMetadataPayload(payload)
 		if err != nil {

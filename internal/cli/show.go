@@ -96,6 +96,31 @@ func newShowCmd() *cli.Command {
 						m["entries"] = entries
 					}
 					return outputJSON(cmdOut(cmd), m)
+				case format.ConfuseOp:
+					if v.Sequence != uint32(targetSeq) {
+						continue
+					}
+					m := map[string]any{
+						"seq":         v.Sequence,
+						"ts":          time.UnixMilli(v.Timestamp).UTC().Format(time.RFC3339),
+						"type":        "confusion",
+						"action":      confusionActionString(v.Action),
+						"id":          v.ID,
+						"sheet":       v.Sheet,
+						"cell":        v.Cell,
+						"archetype":   v.Archetype,
+						"headline":    v.Headline,
+						"description": v.Description,
+						"message":     v.Message,
+						"file":        v.TargetFile,
+					}
+					if v.PayloadJSON != "" {
+						m["payload"] = jsonRaw(v.PayloadJSON)
+					}
+					if v.ResolutionJSON != "" {
+						m["resolution"] = jsonRaw(v.ResolutionJSON)
+					}
+					return outputJSON(cmdOut(cmd), m)
 				default:
 					continue
 				}

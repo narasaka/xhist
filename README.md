@@ -1,6 +1,6 @@
 # xhist
 
-Append-only operation log for Excel files. Every read and write an AI agent performs on a spreadsheet is recorded to a workspace-level binary history file. This allows agents to replay their context and maintain a unified timeline across multiple files.
+Append-only operation log for Excel files. Every read, write, comment, and confusion/resolution an AI agent performs on a spreadsheet is recorded to a workspace-level binary history file. This allows agents to replay their context and maintain a unified timeline across multiple files.
 
 One `.xhist` file tracks all `.xlsx` files in a workspace. The agent never touches the spreadsheet directly. All operations flow through `xhist`.
 
@@ -19,6 +19,7 @@ xhist init my-project
 # 2. Perform operations (workspace log is auto-discovered)
 xhist write budget.xlsx Sheet1!A1 "Revenue" -m "Adding header"
 xhist read budget.xlsx Sheet1!A1
+xhist confuse raise budget.xlsx Sheet1!B2 --archetype GAP --headline "Missing value" --description "No source value found"
 
 # 3. View the unified timeline
 xhist log
@@ -40,6 +41,8 @@ xhist init [name]
 xhist write <file.xlsx> <range> [value] -m "message"
 xhist read <file.xlsx> <range>
 xhist log [file.xlsx]
+xhist confuse raise <file.xlsx> <cell> --archetype <type> --headline <text> --description <text>
+xhist confuse resolve <id> --value <value> --confidence high --reasoning <text>
 xhist info
 ```
 
@@ -73,4 +76,3 @@ Install the xhist skill so your AI agent knows how to use the CLI:
 ```bash
 npx skills add https://github.com/prosights/xhist --skill xhist
 ```
-
