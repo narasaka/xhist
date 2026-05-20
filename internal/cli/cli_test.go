@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prosights/xhist/internal/format"
+	"github.com/narasaka/xhist/internal/format"
 	urfcli "github.com/urfave/cli/v3"
 )
 

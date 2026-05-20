@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/prosights/xhist/internal/format"
+	"github.com/narasaka/xhist/internal/format"
 	"github.com/xuri/excelize/v2"
 )
 

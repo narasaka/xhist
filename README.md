@@ -7,7 +7,7 @@ One `.xhist` file tracks all `.xlsx` files in a workspace. The agent never touch
 ## Install
 
 ```bash
-go install github.com/prosights/xhist/cmd/xhist@latest
+go install github.com/narasaka/xhist/cmd/xhist@latest
 ```
 
 ## Quick Start
@@ -53,7 +53,7 @@ Run `xhist --help` for the full command list.
 Requires Go 1.24+.
 
 ```bash
-git clone https://github.com/prosights/xhist.git
+git clone https://github.com/narasaka/xhist.git
 cd xhist
 make build
 make test
@@ -74,5 +74,5 @@ make clean      Remove build artifacts
 Install the xhist skill so your AI agent knows how to use the CLI:
 
 ```bash
-npx skills add https://github.com/prosights/xhist --skill xhist
+npx skills add https://github.com/narasaka/xhist --skill xhist
 ```

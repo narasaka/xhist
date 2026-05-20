@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/prosights/xhist/internal/excel"
-	"github.com/prosights/xhist/internal/format"
+	"github.com/narasaka/xhist/internal/excel"
+	"github.com/narasaka/xhist/internal/format"
 	"github.com/urfave/cli/v3"
 )
 

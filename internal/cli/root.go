@@ -10,7 +10,7 @@ func buildRootCommand() *cli.Command {
 	return &cli.Command{
 		Name:    "xhist",
 		Usage:   "Git for Excel — append-only operation log for spreadsheets",
-		Version: "0.2.0",
+		Version: "0.3.0",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "human",

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/prosights/xhist/internal/excel"
+	"github.com/narasaka/xhist/internal/excel"
 	"github.com/urfave/cli/v3"
 )
 

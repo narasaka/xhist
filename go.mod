@@ -1,4 +1,4 @@
-module github.com/prosights/xhist
+module github.com/narasaka/xhist
 
 go 1.24.0
 

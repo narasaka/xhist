@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/prosights/xhist/internal/workspace"
+	"github.com/narasaka/xhist/internal/workspace"
 )
 
 func TestDiscoverFindsXhist(t *testing.T) {
