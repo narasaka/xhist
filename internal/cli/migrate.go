@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/prosights/xhist/internal/format"
-	"github.com/prosights/xhist/internal/workspace"
+	"github.com/narasaka/xhist/internal/format"
+	"github.com/narasaka/xhist/internal/workspace"
 	"github.com/urfave/cli/v3"
 )
 
