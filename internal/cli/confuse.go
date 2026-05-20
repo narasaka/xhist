@@ -22,6 +22,7 @@ func newConfuseCmd() *cli.Command {
 			newConfuseRaiseCmd(),
 			newConfuseResolveCmd(),
 			newConfuseSkipCmd(),
+			newConfuseExportCmd(),
 		},
 	}
 }
@@ -36,6 +37,8 @@ func newConfuseRaiseCmd() *cli.Command {
 			&cli.StringFlag{Name: "headline", Usage: "Short summary", Required: true},
 			&cli.StringFlag{Name: "description", Aliases: []string{"d"}, Usage: "Detailed explanation", Required: true},
 			&cli.StringFlag{Name: "payload", Usage: "Additional archetype payload as JSON object"},
+			&cli.StringFlag{Name: "dest-table", Usage: "Destination table this confusion relates to"},
+			&cli.StringFlag{Name: "source-id", Usage: "Source file identifier"},
 			&cli.StringFlag{Name: "message", Aliases: []string{"m"}, Usage: "Why this confusion was raised"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -67,14 +70,22 @@ func newConfuseRaiseCmd() *cli.Command {
 				return outputErrorTo(errW, fmt.Sprintf("parsing cell: %v", err))
 			}
 
-			payload, err := confusionPayload(cmd.String("payload"), map[string]any{
+			defaults := map[string]any{
 				"archetype":     strings.ToUpper(cmd.String("archetype")),
 				"cell":          qualifiedCell(sheet, cell),
 				"headline":      cmd.String("headline"),
 				"description":   cmd.String("description"),
 				"targetFile":    targetFile,
 				"sourceCommand": "xhist confuse raise",
-			})
+			}
+			if destTable := cmd.String("dest-table"); destTable != "" {
+				defaults["destTable"] = destTable
+			}
+			if sourceID := cmd.String("source-id"); sourceID != "" {
+				defaults["sourceId"] = sourceID
+			}
+
+			payload, err := confusionPayload(cmd.String("payload"), defaults)
 			if err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("payload: %v", err))
 			}
@@ -118,6 +129,52 @@ func newConfuseRaiseCmd() *cli.Command {
 			}
 
 			return outputJSON(cmdOut(cmd), map[string]any{"seq": seq, "id": id, "action": "confusion_raise"})
+		},
+	}
+}
+
+func newConfuseExportCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "export",
+		Usage: "Export raised confusions for reconciliation",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "format", Usage: "Export format", Value: "reconciliation"},
+			&cli.StringFlag{Name: "dest-table", Usage: "Destination table for reconciliation items"},
+			&cli.StringFlag{Name: "run-id", Usage: "Architect run ID"},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			_ = ctx
+			errW := cmdErr(cmd)
+			if cmd.String("format") != "reconciliation" {
+				return outputErrorTo(errW, fmt.Sprintf("unsupported export format: %s", cmd.String("format")))
+			}
+
+			xhp, _, err := resolveWorkspaceReadOnly(cmd)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("workspace: %v", err))
+			}
+			if err := requireV2(xhp); err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("version: %v", err))
+			}
+
+			records, err := scanRecords(xhp)
+			if err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("reading log: %v", err))
+			}
+
+			items := make([]map[string]any, 0)
+			for _, record := range records {
+				if record.ConfuseOp == nil || record.ConfuseOp.Action != format.ActionConfusionRaise {
+					continue
+				}
+				item, err := reconciliationItem(*record.ConfuseOp, cmd.String("dest-table"), cmd.String("run-id"))
+				if err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("confusion %s: %v", record.ConfuseOp.ID, err))
+				}
+				items = append(items, item)
+			}
+
+			return outputJSON(cmdOut(cmd), map[string]any{"items": items})
 		},
 	}
 }
@@ -251,6 +308,104 @@ func confusionPayload(raw string, defaults map[string]any) (string, error) {
 	}
 	b, err := json.Marshal(obj)
 	return string(b), err
+}
+
+func reconciliationItem(op format.ConfuseOp, destTable, runID string) (map[string]any, error) {
+	payload, err := confusionPayloadObject(op, runID)
+	if err != nil {
+		return nil, err
+	}
+	if destTable == "" {
+		destTable = stringValue(payload, "destTable")
+	}
+	sourceID := stringValue(payload, "sourceId")
+	if sourceID == "" {
+		sourceID = stringValue(payload, "targetFile")
+	}
+	if sourceID == "" {
+		sourceID = op.TargetFile
+	}
+
+	column := columnFromCell(op.Cell)
+	contextTag := qualifiedCell(op.Sheet, op.Cell)
+	return map[string]any{
+		"id":          op.ID,
+		"archetype":   "CONFLICT",
+		"headline":    firstNonEmpty(op.Headline, stringValue(payload, "headline")),
+		"description": firstNonEmpty(op.Description, stringValue(payload, "description")),
+		"state":       "escalated",
+		"context_tag": contextTag,
+		"dest_slot": map[string]any{
+			"descriptor": joinDescriptor(destTable, column),
+			"label":      column,
+		},
+		"primary_source": map[string]any{
+			"source_id": sourceID,
+			"locator": map[string]any{
+				"kind":  "xlsx",
+				"sheet": op.Sheet,
+				"range": op.Cell,
+			},
+		},
+		"evidence":     []any{},
+		"payload":      payload,
+		"source_field": contextTag,
+	}, nil
+}
+
+func confusionPayloadObject(op format.ConfuseOp, runID string) (map[string]any, error) {
+	payload := map[string]any{
+		"archetype":     op.Archetype,
+		"cell":          qualifiedCell(op.Sheet, op.Cell),
+		"headline":      op.Headline,
+		"description":   op.Description,
+		"targetFile":    op.TargetFile,
+		"sourceCommand": "xhist confuse raise",
+	}
+	if op.PayloadJSON != "" {
+		if err := json.Unmarshal([]byte(op.PayloadJSON), &payload); err != nil {
+			return nil, fmt.Errorf("payload: %v", err)
+		}
+	}
+	if runID != "" {
+		payload["runId"] = runID
+	}
+	return payload, nil
+}
+
+func stringValue(obj map[string]any, key string) string {
+	if v, ok := obj[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func columnFromCell(cell string) string {
+	for i, r := range cell {
+		if r >= '0' && r <= '9' {
+			return strings.TrimLeft(cell[:i], "$")
+		}
+	}
+	return strings.TrimLeft(cell, "$")
+}
+
+func joinDescriptor(destTable, column string) string {
+	if destTable == "" {
+		return column
+	}
+	if column == "" {
+		return destTable
+	}
+	return destTable + "." + column
 }
 
 func newConfusionID() (string, error) {
