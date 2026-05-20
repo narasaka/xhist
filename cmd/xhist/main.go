@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/prosights/xhist/internal/cli"
+	"github.com/narasaka/xhist/internal/cli"
 )
 
 func main() {
