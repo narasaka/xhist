@@ -19,7 +19,7 @@ xhist init my-project
 # 2. Perform operations (workspace log is auto-discovered)
 xhist write budget.xlsx Sheet1!A1 "Revenue" -m "Adding header"
 xhist read budget.xlsx Sheet1!A1
-xhist confuse raise budget.xlsx Sheet1!B2 --archetype GAP --headline "Missing value" --description "No source value found"
+xhist confuse raise budget.xlsx Sheet1!B2 --archetype GAP --headline "Missing value" --description "No source value found" --evidence '[{"id":"ev-b2","sourceRef":{"sourceId":"budget.xlsx","locator":{"kind":"xlsx","sheet":"Sheet1","range":"B2"}},"tone":"focus","label":"Sheet1 B2"}]'
 
 # 3. View the unified timeline
 xhist log
@@ -41,7 +41,7 @@ xhist init [name]
 xhist write <file.xlsx> <range> [value] -m "message"
 xhist read <file.xlsx> <range>
 xhist log [file.xlsx]
-xhist confuse raise <file.xlsx> <cell> --archetype <type> --headline <text> --description <text>
+xhist confuse raise <file.xlsx> <cell> --archetype <type> --headline <text> --description <text> --evidence <json-array>
 xhist confuse resolve <id> --value <value> --confidence high --reasoning <text>
 xhist info
 ```

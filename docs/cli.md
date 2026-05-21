@@ -175,6 +175,44 @@ xhist show <seq>
 
 ---
 
+### `xhist confuse`
+
+Record spreadsheet confusion and resolution events for reconciliation review.
+
+```
+xhist confuse raise <file.xlsx> <cell> --archetype <type> --headline <text> --description <text> --evidence <json-array> [flags]
+xhist confuse export [flags]
+xhist confuse resolve <id> --confidence <high|medium|low> --reasoning <text> [flags]
+xhist confuse skip <id> --reasoning <text> [flags]
+```
+
+| Subcommand | Required flags | Optional flags |
+|------------|----------------|----------------|
+| `raise` | `--archetype`, `--headline`, `--description`, `--evidence` | `--payload`, `--dest-table`, `--source-id`, `--message`/`-m`, `--id` |
+| `export` | (none) | `--format reconciliation`, `--dest-table`, `--run-id` |
+| `resolve` | `--confidence`, `--reasoning`/`-r` | `--value`, `--source`, `--message`/`-m` |
+| `skip` | `--reasoning`/`-r` | `--source`, `--message`/`-m` |
+
+`--evidence` must be a non-empty JSON array. Each evidence entry must include a source reference with a source id and locator, using either camelCase or snake_case keys:
+
+```json
+[
+  {
+    "id": "ev-sheet-a1",
+    "sourceRef": {
+      "sourceId": "budget.xlsx",
+      "locator": { "kind": "xlsx", "sheet": "Sheet1", "range": "A1" }
+    },
+    "tone": "focus",
+    "label": "Sheet1 A1"
+  }
+]
+```
+
+`xhist confuse export` includes this evidence in both the exported reconciliation item and payload so downstream review surfaces can render the source context.
+
+---
+
 ### `xhist comment`
 
 Manage native Excel cell comments. Three subcommands: `set`, `get`, `delete`. Comments are written into the `.xlsx` file as real Excel notes AND recorded in the workspace log as `comment_set` / `comment_delete` ops.
@@ -334,4 +372,3 @@ xhist sheets <file.xlsx>
 3. xhist log budget.xlsx --last 5         → focus on specific file
 4. ... continue work ...
 ```
-

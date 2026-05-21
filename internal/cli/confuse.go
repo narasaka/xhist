@@ -6,12 +6,19 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/narasaka/xhist/internal/excel"
 	"github.com/narasaka/xhist/internal/format"
 	"github.com/urfave/cli/v3"
+)
+
+const (
+	maxConfusionEvidenceEntries = 8
+	maxConfusionEvidenceBytes   = 16 * 1024
+	maxConfusionEvidenceString  = 4096
 )
 
 func newConfuseCmd() *cli.Command {
@@ -36,6 +43,7 @@ func newConfuseRaiseCmd() *cli.Command {
 			&cli.StringFlag{Name: "archetype", Aliases: []string{"a"}, Usage: "Confusion archetype", Required: true},
 			&cli.StringFlag{Name: "headline", Usage: "Short summary", Required: true},
 			&cli.StringFlag{Name: "description", Aliases: []string{"d"}, Usage: "Detailed explanation", Required: true},
+			&cli.StringFlag{Name: "evidence", Usage: "Required reconciliation evidence as a JSON array"},
 			&cli.StringFlag{Name: "payload", Usage: "Additional archetype payload as JSON object"},
 			&cli.StringFlag{Name: "dest-table", Usage: "Destination table this confusion relates to"},
 			&cli.StringFlag{Name: "source-id", Usage: "Source file identifier"},
@@ -84,10 +92,20 @@ func newConfuseRaiseCmd() *cli.Command {
 			if sourceID := cmd.String("source-id"); sourceID != "" {
 				defaults["sourceId"] = sourceID
 			}
+			if evidence := cmd.String("evidence"); evidence != "" {
+				var parsedEvidence []any
+				if err := json.Unmarshal([]byte(evidence), &parsedEvidence); err != nil {
+					return outputErrorTo(errW, fmt.Sprintf("evidence: %v", err))
+				}
+				defaults["evidence"] = parsedEvidence
+			}
 
 			payload, err := confusionPayload(cmd.String("payload"), defaults)
 			if err != nil {
 				return outputErrorTo(errW, fmt.Sprintf("payload: %v", err))
+			}
+			if err := requireConfusionEvidence(payload); err != nil {
+				return outputErrorTo(errW, fmt.Sprintf("evidence: %v", err))
 			}
 
 			id := cmd.String("id")
@@ -310,6 +328,85 @@ func confusionPayload(raw string, defaults map[string]any) (string, error) {
 	return string(b), err
 }
 
+func requireConfusionEvidence(payload string) error {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(payload), &obj); err != nil {
+		return err
+	}
+	evidence, ok := obj["evidence"].([]any)
+	if !ok || len(evidence) == 0 {
+		return fmt.Errorf("at least one evidence entry is required")
+	}
+	if len(evidence) > maxConfusionEvidenceEntries {
+		return fmt.Errorf("at most %d evidence entries are allowed", maxConfusionEvidenceEntries)
+	}
+	evidenceBytes, err := json.Marshal(evidence)
+	if err != nil {
+		return err
+	}
+	if len(evidenceBytes) > maxConfusionEvidenceBytes {
+		return fmt.Errorf("evidence JSON must be at most %d bytes", maxConfusionEvidenceBytes)
+	}
+	for i, item := range evidence {
+		ev, ok := item.(map[string]any)
+		if !ok {
+			return fmt.Errorf("entry %d must be an object", i)
+		}
+		if err := requireBoundedEvidenceValue(ev, "entry "+strconv.Itoa(i), 0); err != nil {
+			return err
+		}
+		ref, ok := evidenceSourceRef(ev)
+		if !ok {
+			return fmt.Errorf("entry %d must include sourceRef", i)
+		}
+		if stringValue(ref, "sourceId") == "" && stringValue(ref, "source_id") == "" {
+			return fmt.Errorf("entry %d sourceRef must include sourceId", i)
+		}
+		if _, ok := ref["locator"].(map[string]any); !ok {
+			return fmt.Errorf("entry %d sourceRef must include locator", i)
+		}
+	}
+	return nil
+}
+
+func requireBoundedEvidenceValue(value any, path string, depth int) error {
+	if depth > 5 {
+		return fmt.Errorf("%s is nested too deeply", path)
+	}
+	switch v := value.(type) {
+	case string:
+		if len(v) > maxConfusionEvidenceString {
+			return fmt.Errorf("%s string must be at most %d bytes", path, maxConfusionEvidenceString)
+		}
+	case []any:
+		if len(v) > maxConfusionEvidenceEntries {
+			return fmt.Errorf("%s array has too many entries", path)
+		}
+		for i, item := range v {
+			if err := requireBoundedEvidenceValue(item, path+"["+strconv.Itoa(i)+"]", depth+1); err != nil {
+				return err
+			}
+		}
+	case map[string]any:
+		for key, item := range v {
+			if err := requireBoundedEvidenceValue(item, path+"."+key, depth+1); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func evidenceSourceRef(ev map[string]any) (map[string]any, bool) {
+	if ref, ok := ev["sourceRef"].(map[string]any); ok {
+		return ref, true
+	}
+	if ref, ok := ev["source_ref"].(map[string]any); ok {
+		return ref, true
+	}
+	return nil, false
+}
+
 func reconciliationItem(op format.ConfuseOp, destTable, runID string) (map[string]any, error) {
 	payload, err := confusionPayloadObject(op, runID)
 	if err != nil {
@@ -328,6 +425,22 @@ func reconciliationItem(op format.ConfuseOp, destTable, runID string) (map[strin
 
 	column := columnFromCell(op.Cell)
 	contextTag := qualifiedCell(op.Sheet, op.Cell)
+	evidence := arrayValue(payload, "evidence")
+	primarySource := objectValue(payload, "primary_source")
+	if primarySource == nil {
+		primarySource = objectValue(payload, "primarySource")
+	}
+	if primarySource == nil {
+		primarySource = map[string]any{
+			"source_id": sourceID,
+			"locator": map[string]any{
+				"kind":  "xlsx",
+				"sheet": op.Sheet,
+				"range": op.Cell,
+			},
+		}
+	}
+
 	return map[string]any{
 		"id":          op.ID,
 		"archetype":   "CONFLICT",
@@ -339,17 +452,10 @@ func reconciliationItem(op format.ConfuseOp, destTable, runID string) (map[strin
 			"descriptor": joinDescriptor(destTable, column),
 			"label":      column,
 		},
-		"primary_source": map[string]any{
-			"source_id": sourceID,
-			"locator": map[string]any{
-				"kind":  "xlsx",
-				"sheet": op.Sheet,
-				"range": op.Cell,
-			},
-		},
-		"evidence":     []any{},
-		"payload":      payload,
-		"source_field": contextTag,
+		"primary_source": primarySource,
+		"evidence":       evidence,
+		"payload":        payload,
+		"source_field":   contextTag,
 	}, nil
 }
 
@@ -378,6 +484,20 @@ func stringValue(obj map[string]any, key string) string {
 		return v
 	}
 	return ""
+}
+
+func objectValue(obj map[string]any, key string) map[string]any {
+	if v, ok := obj[key].(map[string]any); ok {
+		return v
+	}
+	return nil
+}
+
+func arrayValue(obj map[string]any, key string) []any {
+	if v, ok := obj[key].([]any); ok {
+		return v
+	}
+	return []any{}
 }
 
 func firstNonEmpty(values ...string) string {

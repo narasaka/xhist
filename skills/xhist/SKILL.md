@@ -149,6 +149,7 @@ xhist confuse raise budget.xlsx 'Sheet1!B2' \
   --archetype GAP \
   --headline "Missing revenue value" \
   --description "No source value was found for the requested period" \
+  --evidence '[{"id":"ev-b2","sourceRef":{"sourceId":"budget.xlsx","locator":{"kind":"xlsx","sheet":"Sheet1","range":"B2"}},"tone":"focus","label":"Sheet1 B2"}]' \
   --payload '{"sourceField":"Revenue"}' \
   -m "Needs reconciliation before writing"
 
