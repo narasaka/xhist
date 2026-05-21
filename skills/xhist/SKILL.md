@@ -143,6 +143,8 @@ xhist comment delete budget.xlsx 'Sheet1!A1:C10' -m "Clearing all citations"
 
 Use `xhist confuse` when you cannot confidently write a value yet. Confusions are stored in the same `.xhist` artifact as reads, writes, and comments.
 
+Evidence must identify the exact source location: PDF page+bbox, XLSX sheet+cell/range, warehouse rowKey+column, or text offsets. For GAP, cite the blank/missing source region. For CONFLICT or DRIFT, include one evidence entry per disagreeing source value. Never use only a filename as evidence.
+
 ```bash
 # Raise a cell-level confusion
 xhist confuse raise budget.xlsx 'Sheet1!B2' \

@@ -46,6 +46,8 @@ xhist confuse resolve <id> --value <value> --confidence high --reasoning <text>
 xhist info
 ```
 
+Confusion evidence must cite an exact source location: PDF page+bbox, XLSX sheet+cell/range, warehouse rowKey+column, or text offsets. A filename alone is not enough.
+
 Run `xhist --help` for the full command list.
 
 ## Development

@@ -193,7 +193,7 @@ xhist confuse skip <id> --reasoning <text> [flags]
 | `resolve` | `--confidence`, `--reasoning`/`-r` | `--value`, `--source`, `--message`/`-m` |
 | `skip` | `--reasoning`/`-r` | `--source`, `--message`/`-m` |
 
-`--evidence` must be a non-empty JSON array. Each evidence entry must include a source reference with a source id and locator, using either camelCase or snake_case keys:
+`--evidence` must be a non-empty JSON array. Each evidence entry must include a source reference with a source id and a concrete locator, using either camelCase or snake_case keys:
 
 ```json
 [
@@ -208,6 +208,15 @@ xhist confuse skip <id> --reasoning <text> [flags]
   }
 ]
 ```
+
+Locator requirements:
+
+- PDF evidence: `{"kind":"pdf","page":1,"bbox":{"left":0.1,"top":0.2,"width":0.3,"height":0.04}}`
+- XLSX evidence: `{"kind":"xlsx","sheet":"Sheet1","range":"A1:B2"}`
+- Warehouse/database evidence: `{"kind":"warehouse","rowKey":{"account_code":"40110"},"column":"amount"}`
+- Text fallback: `{"kind":"text","start":120,"end":180}`
+
+For gaps, cite the blank or expected source region. For conflicts or drift, include one evidence entry for each disagreeing source value.
 
 `xhist confuse export` includes this evidence in both the exported reconciliation item and payload so downstream review surfaces can render the source context.
 

@@ -362,11 +362,82 @@ func requireConfusionEvidence(payload string) error {
 		if stringValue(ref, "sourceId") == "" && stringValue(ref, "source_id") == "" {
 			return fmt.Errorf("entry %d sourceRef must include sourceId", i)
 		}
-		if _, ok := ref["locator"].(map[string]any); !ok {
-			return fmt.Errorf("entry %d sourceRef must include locator", i)
+		if err := requireConcreteLocator(ref["locator"], "entry "+strconv.Itoa(i)+" sourceRef"); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func requireConcreteLocator(value any, path string) error {
+	locator, ok := value.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s must include locator", path)
+	}
+	switch locator["kind"] {
+	case "pdf":
+		if !positiveNumber(locator["page"]) {
+			return fmt.Errorf("%s locator pdf evidence must include page", path)
+		}
+		bbox, ok := locator["bbox"].(map[string]any)
+		if !ok {
+			return fmt.Errorf("%s locator pdf evidence must include bbox", path)
+		}
+		for _, key := range []string{"left", "top", "width", "height"} {
+			if !numberValue(bbox[key]) {
+				return fmt.Errorf("%s locator pdf bbox must include %s", path, key)
+			}
+		}
+	case "xlsx":
+		if stringValue(locator, "sheet") == "" {
+			return fmt.Errorf("%s locator xlsx evidence must include sheet", path)
+		}
+		if stringValue(locator, "range") == "" {
+			return fmt.Errorf("%s locator xlsx evidence must include range", path)
+		}
+	case "warehouse":
+		rowKey, ok := locator["rowKey"].(map[string]any)
+		if !ok {
+			rowKey, ok = locator["row_key"].(map[string]any)
+		}
+		if !ok || len(rowKey) == 0 {
+			return fmt.Errorf("%s locator warehouse evidence must include rowKey", path)
+		}
+	case "text":
+		if _, ok := locator["start"].(float64); !ok {
+			return fmt.Errorf("%s locator text evidence must include start", path)
+		}
+		if _, ok := locator["end"].(float64); !ok {
+			return fmt.Errorf("%s locator text evidence must include end", path)
+		}
+	case "image":
+		if _, ok := locator["bbox"].(map[string]any); !ok {
+			return fmt.Errorf("%s locator image evidence must include bbox", path)
+		}
+	default:
+		return fmt.Errorf("%s locator kind must be pdf, xlsx, warehouse, text, or image", path)
+	}
+	return nil
+}
+
+func positiveNumber(value any) bool {
+	switch v := value.(type) {
+	case float64:
+		return v >= 1
+	case int:
+		return v >= 1
+	default:
+		return false
+	}
+}
+
+func numberValue(value any) bool {
+	switch value.(type) {
+	case float64, int:
+		return true
+	default:
+		return false
+	}
 }
 
 func requireBoundedEvidenceValue(value any, path string, depth int) error {
